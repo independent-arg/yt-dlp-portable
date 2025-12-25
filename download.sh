@@ -25,5 +25,7 @@ mkdir -p "$BASEDIR/downloads"
   --js-runtimes "node:${BASEDIR}/bin/node" \
   --ffmpeg-location "${BASEDIR}/bin/ffmpeg" \
   --concurrent-fragments 5 \
+  --write-thumbnail \
+  --convert-thumbnails jpg \
   -P "$BASEDIR/downloads" \
   "$@"
