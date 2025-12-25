@@ -4,6 +4,11 @@
 # Get the absolute path of the script's directory
 BASEDIR=$(dirname "$(readlink -f "$0")")
 
+if [ ! -f "$BASEDIR/bin/yt-dlp" ] || [ ! -f "$BASEDIR/bin/node" ] || [ ! -f "$BASEDIR/bin/ffmpeg" ] || [ ! -f "$BASEDIR/bin/ffprobe" ]; then
+    echo "[ERROR] Binaries not found. Please run: bash setup.sh"
+    exit 1
+fi
+
 # Check if a URL was provided
 if [ -z "$1" ]; then
     echo "Usage: ./download.sh [URL]"
