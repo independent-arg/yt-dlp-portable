@@ -1,17 +1,38 @@
 # Binaries
-bin/*
+bin/
 
 # Media Downloads
-downloads/*
+*.mp4
+*.mkv
+*.webm
+*.avi
+*.mov
+*.mp3
+*.m4a
+*.opus
+*.flac
+*.wav
+
+*.jpg
+*.png
+*.webp
+*.info.json
+*.description
 
 # Temporary files and archives
 *.tmp
 *.tar.xz
 *.part
 *.ytdl
+*.f*
 
 # Logs
 *.log
 
 # System files
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*~
+*.swp
