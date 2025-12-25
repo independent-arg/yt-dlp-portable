@@ -15,9 +15,21 @@ This project requires the following binaries inside the `bin/` folder:
 2. Place the required binaries in the `bin/` directory.
 3. Make the script executable: `chmod +x download.sh`.
 
+```text
+yt-dlp-portable/
+├── download.sh
+├── bin/
+│   ├── ffmpeg
+│   ├── ffprobe
+│   ├── node
+│   └── yt-dlp
+└── downloads/ (automatically created)
+```
+
 ## Usage
 ```bash
 ./download.sh "URL"
+```
 
 ---
 
