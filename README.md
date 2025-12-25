@@ -12,18 +12,23 @@ This project requires the following binaries inside the `bin/` folder:
 
 ## Installation
 1. Clone this repository.
-2. Place the required binaries in the `bin/` directory.
-3. Make the script executable: `chmod +x download.sh`.
+2. Run setup.sh: this script will download and verify the correct versions of yt-dlp, FFmpeg, and Node.js into the bin/ folder.
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+3. Make the main script executable:: `chmod +x download.sh`.
 
 ```text
 yt-dlp-portable/
-├── download.sh
+├── download.sh      # Main execution script
+├── setup.sh         # Environment provisioning & verification
 ├── bin/
 │   ├── ffmpeg
 │   ├── ffprobe
 │   ├── node
 │   └── yt-dlp
-└── downloads/ (automatically created)
+└── downloads/       # Automatically created
 ```
 
 ## Usage
