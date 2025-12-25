@@ -1,49 +1,17 @@
-# Binaries (Each user must provide their own)
-bin/yt-dlp
-bin/ffmpeg
-bin/node
-bin/ffprobe
+# Binaries
+bin/*
 
-# Downloaded content
-downloads/
-*.3gp
-*.ape
-*.ass
-*.avi
-*.desktop
-*.f4v
-*.flac
-*.flv
-*.gif
-*.jpeg
-*.jpg
-*.lrc
-*.m4a
-*.m4v
-*.mhtml
-*.mkv
-*.mov
-*.mp3
-*.mp4
-*.mpg
-*.mpga
-*.oga
-*.ogg
-*.opus
-*.png
-*.sbv
-*.srt
-*.ssa
-*.swf
-*.tt
-*.ttml
-*.url
-*.vtt
-*.wav
-*.webloc
-*.webm
-*.webp
+# Media Downloads
+downloads/*
 
-# Logs and temporary files
+# Temporary files and archives
+*.tmp
+*.tar.xz
+*.part
+*.ytdl
+
+# Logs
 *.log
-tmp/
+
+# System files
+.DS_Store
