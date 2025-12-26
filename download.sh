@@ -47,12 +47,29 @@ if [ $# -eq 0 ]; then
     exit 1
 fi
 
+USER_AGENT_LIST=(
+    "Mozilla/5.0 (X11; Linux x86_64; rv:146.0) Gecko/20100101 Firefox/146.0"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.3650.96"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:146.0) Gecko/20100101 Firefox/146.0"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"
+)
+
+# Pick a random User Agent from the list
+RANDOM_USER_AGENT=${USER_AGENT_LIST[$RANDOM % ${#USER_AGENT_LIST[@]}]}
+
+echo -e "${GREEN}[STEALTH] Identity assigned: $RANDOM_USER_AGENT${NC}"
+
 echo -e "${GREEN}[INFO] Starting yt-dlp from portable environment...${NC}"
 
 # 3. Run yt-dlp with portable paths
 # Note: Added --restrict-filenames to prevent errors with special characters in filenames
 "$BINDIR/yt-dlp" \
   --verbose \
+  --user-agent "$RANDOM_USER_AGENT" \
+  --referer "https://www.youtube.com/" \
+  --sleep-requests 1.5 \
   --js-runtimes "node:${BINDIR}/node" \
   --ffmpeg-location "${BINDIR}/ffmpeg" \
   --concurrent-fragments 5 \
