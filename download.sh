@@ -57,8 +57,7 @@ echo -e "${GREEN}[INFO] Starting yt-dlp from portable environment...${NC}"
   --ffmpeg-location "${BINDIR}/ffmpeg" \
   --concurrent-fragments 5 \
   -f "bv+(251/mergeall[format_id~=251-]/140/mergeall[format_id~=140-])/b" \
-  --write-thumbnail \
-  --convert-thumbnails jpg \
+  --embed-thumbnail \
   --restrict-filenames \
   --output "%(title)s [%(id)s].%(ext)s" \
   --no-mtime \
