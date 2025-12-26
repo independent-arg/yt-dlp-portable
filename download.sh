@@ -58,6 +58,7 @@ echo -e "${GREEN}[INFO] Starting yt-dlp from portable environment...${NC}"
   --concurrent-fragments 5 \
   -f "bv+(251/mergeall[format_id~=251-]/140/mergeall[format_id~=140-])/b" \
   --embed-thumbnail \
+  --convert-thumbnails jpg \
   --restrict-filenames \
   --output "%(title)s [%(id)s].%(ext)s" \
   --no-mtime \
