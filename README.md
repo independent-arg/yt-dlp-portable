@@ -11,13 +11,29 @@ This project requires the following binaries inside the `bin/` folder:
 > **Note:** An external JavaScript runtime (like Node.js or Deno) is now required for full YouTube support. yt-dlp uses it to solve JavaScript challenges presented by the platform. [Read more](https://github.com/yt-dlp/yt-dlp/issues/15012).
 
 ## Installation
-1. Clone this repository.
-2. Run setup.sh: this script will download and verify the correct versions of yt-dlp, FFmpeg, and Node.js into the bin/ folder.
+1. **Clone this repository**:
 ```bash
-chmod +x setup.sh
-./setup.sh
+git clone https://codeberg.org/independent_arg/yt-dlp-portable.git
+cd yt-dlp-portable
 ```
-3. Make the main script executable:: `chmod +x download.sh`.
+2. **Make scripts executable**:
+```bash
+chmod +x *.sh
+
+```
+3. **Run the setup script**:
+This will download the required binaries to the `bin/` folder.
+```bash
+./setup.sh
+
+```
+*Wait for the process to finish. It will verify the hashes of the downloaded files.*
+
+## Usage
+Use the `download.sh` script to download videos. It acts as a wrapper for `yt-dlp`.
+```bash
+./download.sh "URL"
+```
 
 ```text
 yt-dlp-portable/
@@ -31,10 +47,6 @@ yt-dlp-portable/
 └── downloads/       # Automatically created
 ```
 
-## Usage
-```bash
-./download.sh "URL"
-```
 
 ---
 
