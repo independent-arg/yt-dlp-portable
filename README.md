@@ -13,7 +13,7 @@ This project requires the following binaries inside the `bin/` folder:
 ## Installation
 1. **Clone this repository**:
 ```bash
-git clone https://codeberg.org/independent_arg/yt-dlp-portable.git
+git clone https://github.com/independent-arg/yt-dlp-portable.git
 cd yt-dlp-portable
 ```
 2. **Make scripts executable**:
