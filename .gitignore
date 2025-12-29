@@ -1,38 +1,57 @@
-# Binaries
+# Executable binaries (downloaded by setup.sh)
 bin/
 
-# Media Downloads
+# Log and temporary files
+install_log.txt
+*.log
+*.tmp
+
+# Downloaded media files (videos, audios, etc.)
 *.mp4
-*.mkv
 *.webm
-*.avi
-*.mov
-*.mp3
+*.mkv
 *.m4a
+*.mp3
 *.opus
 *.flac
 *.wav
+*.ogg
+*.avi
+*.mov
+*.flv
+*.wmv
+*.3gp
 
-*.jpg
-*.png
-*.webp
-*.info.json
-*.description
-
-# Temporary files and archives
-*.tmp
-*.tar.xz
-*.part
-*.ytdl
-*.f*
-
-# Logs
-*.log
+# Downloaded subtitles
+*.srt
+*.vtt
+*.ass
+*.ssa
 
 # System files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+desktop.ini
+
+# Editor files
+*.swp
+*.swo
+*~
 .vscode/
 .idea/
-*~
-*.swp
+*.sublime-project
+*.sublime-workspace
+
+# Bash temporary files
+*.bak
+*.backup
+*.old
+
+# Local configuration files (if any)
+*.local
+config.local.*
