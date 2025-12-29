@@ -5,15 +5,25 @@
 set -euo pipefail
 
 # Paths
-BASEDIR=$(dirname "$(readlink -f "$0")")
+if command -v readlink >/dev/null 2>&1 && readlink -f "$0" >/dev/null 2>&1; then
+    BASEDIR=$(dirname "$(readlink -f "$0")")
+else
+    # Fallback for systems without readlink -f
+    BASEDIR=$(cd "$(dirname "$0")" && pwd -P)
+fi
 BINDIR="${BASEDIR}/bin"
-TEMP_DIR=$(mktemp -d)
 
-# Colors
+# Colors (must be defined before any usage)
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
+
+TEMP_DIR=$(mktemp -d)
+if [[ ! -d "$TEMP_DIR" ]]; then
+    echo -e "${RED}[ERROR] Failed to create temporary directory${NC}"
+    exit 1
+fi
 
 # Cleanup temp on exit (success or fail)
 trap 'rm -rf "${TEMP_DIR}"' EXIT
