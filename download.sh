@@ -5,16 +5,22 @@
 set -euo pipefail
 
 # Function to handle interruptions (Ctrl+C)
-trap 'echo -e "\n[INFO] Download interrupted by user."; exit 130' INT
+trap 'echo -e "\n${YELLOW}[INFO] Download interrupted by user.${NC}"; exit 130' INT
 
 # Robustly get the absolute path of the script directory
-BASEDIR=$(dirname "$(readlink -f "$0")")
+if command -v readlink >/dev/null 2>&1 && readlink -f "$0" >/dev/null 2>&1; then
+    BASEDIR=$(dirname "$(readlink -f "$0")")
+else
+    # Fallback for systems without readlink -f (macOS, BSD)
+    BASEDIR=$(cd "$(dirname "$0")" && pwd -P)
+fi
 BINDIR="$BASEDIR/bin"
 
 # Colors for messages
-RED='\033[0;31m'
 GREEN='\033[0;32m'
-NC='\033[0m' # No Color
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
 # Function to verify binaries and permissions
 check_binary() {
