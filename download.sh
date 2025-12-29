@@ -60,17 +60,75 @@ if [ $# -eq 0 ]; then
     exit 1
 fi
 
-USER_AGENT_LIST=(
-    "Mozilla/5.0 (X11; Linux x86_64; rv:146.0) Gecko/20100101 Firefox/146.0"
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.3650.96"
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:146.0) Gecko/20100101 Firefox/146.0"
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"
-)
+# Function to get a random number (using urandom if available)
+random_num() {
+    local min=$1
+    local max=$2
+    local rand
+    if [[ -r /dev/urandom ]]; then
+        rand=$(od -An -N2 -tu2 /dev/urandom | tr -d ' ')
+        echo $((min + (rand % (max - min + 1))))
+    else
+        echo $((min + (RANDOM % (max - min + 1))))
+    fi
+}
+
+# Generate random user agent
+generate_random_user_agent() {
+    local chrome_major
+    local firefox_ver
+    local os
+    local chrome_ver
+    
+    chrome_major=$(random_num 137 143)
+    firefox_ver=$(random_num 140 146)
+    os=$(random_num 1 3)
+    
+    case $chrome_major in
+        137) 
+            local versions=("137.0.7151.68")
+            chrome_ver="${versions[0]}"
+            ;;
+        138) 
+            local versions=("138.0.7204.49" "138.0.7204.50")
+            chrome_ver="${versions[$(random_num 0 1)]}"
+            ;;
+        139) 
+            local versions=("139.0.7260.40")
+            chrome_ver="${versions[0]}"
+            ;;
+        140) 
+            local versions=("140.0.7339.128")
+            chrome_ver="${versions[0]}"
+            ;;
+        141) 
+            local versions=("141.0.7390.54" "141.0.7390.55")
+            chrome_ver="${versions[$(random_num 0 1)]}"
+            ;;
+        142) 
+            local versions=("142.0.7444.59" "142.0.7444.60")
+            chrome_ver="${versions[$(random_num 0 1)]}"
+            ;;
+        143) 
+            local versions=("143.0.7499.40" "143.0.7499.41")
+            chrome_ver="${versions[$(random_num 0 1)]}"
+            ;;
+    esac
+    
+    case $os in
+        1) local os_str="Windows NT 10.0; Win64; x64" ;;
+        2) local os_str="X11; Linux x86_64" ;;
+        3) local os_str="Macintosh; Intel Mac OS X 26_0" ;;
+    esac
+    
+    case $(random_num 1 2) in
+        1) echo "Mozilla/5.0 ($os_str) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome_ver} Safari/537.36" ;;
+        2) echo "Mozilla/5.0 ($os_str; rv:${firefox_ver}.0) Gecko/20100101 Firefox/${firefox_ver}.0" ;;
+    esac
+}
 
 # Pick a random User Agent from the list
-RANDOM_USER_AGENT=${USER_AGENT_LIST[$RANDOM % ${#USER_AGENT_LIST[@]}]}
+RANDOM_USER_AGENT=$(generate_random_user_agent)
 
 echo -e "${GREEN}[STEALTH] Identity assigned: $RANDOM_USER_AGENT${NC}"
 
