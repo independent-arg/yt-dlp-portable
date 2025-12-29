@@ -5,6 +5,7 @@
 set -euo pipefail
 
 # Paths
+# Robust path resolution (works on Linux, macOS, BSD)
 if command -v readlink >/dev/null 2>&1 && readlink -f "$0" >/dev/null 2>&1; then
     BASEDIR=$(dirname "$(readlink -f "$0")")
 else
@@ -42,9 +43,10 @@ DENO_SUM_URL="https://github.com/denoland/deno/releases/latest/download/deno-x86
 
 check_system() {
     # 1. Check Dependencies
-    for cmd in curl sha256sum tar xz find grep awk; do
+    for cmd in curl sha256sum tar xz find grep awk unzip; do
         if ! command -v "$cmd" &> /dev/null; then
             echo -e "${RED}[ERROR] Missing: $cmd${NC}"
+            echo -e "${RED}Please install the missing dependency and try again.${NC}"
             exit 1
         fi
     done
@@ -53,34 +55,92 @@ check_system() {
     local arch=$(uname -m)
     if [[ "$arch" != "x86_64" ]]; then
         echo -e "${YELLOW}[WARN] Your system is $arch. These binaries are for x86_64 and may not work.${NC}"
-        sleep 2
+        read -p "Continue anyway? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
     fi
 }
 
 download_file() {
     local url="$1"
     local dest="$2"
+    local retries=3
+    local attempt=1
+    
     echo -e "${GREEN}[DOWNLOAD] $(basename "$url")${NC}"
-    curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 "$url" -o "$dest"
+    
+    while [ $attempt -le $retries ]; do
+        if curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 300 "$url" -o "$dest" 2>/dev/null; then
+            # Verify file was downloaded and is not empty
+            if [[ -s "$dest" ]]; then
+                return 0
+            else
+                echo -e "${YELLOW}[WARN] Downloaded file is empty, retrying... (attempt $attempt/$retries)${NC}"
+                rm -f "$dest"
+            fi
+        else
+            echo -e "${YELLOW}[WARN] Download failed, retrying... (attempt $attempt/$retries)${NC}"
+        fi
+        
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+    
+    echo -e "${RED}[ERROR] Failed to download $(basename "$url") after $retries attempts${NC}"
+    echo -e "${RED}Please check your internet connection and try again.${NC}"
+    exit 1
 }
 
 verify_hash() {
     local file="$1"
     local expected="$2"
+    
+    # Validate inputs
+    if [[ -z "$expected" ]]; then
+        echo -e "${RED}[ERROR] Expected hash is empty for $(basename "$file")${NC}"
+        exit 1
+    fi
+    
+    if [[ ! -f "$file" ]]; then
+        echo -e "${RED}[ERROR] File not found for hash verification: $file${NC}"
+        exit 1
+    fi
+    
     local actual=$(sha256sum "$file" | awk '{print $1}')
-    echo "[VERIFY] Checking SHA256..."
+    if [[ -z "$actual" ]]; then
+        echo -e "${RED}[ERROR] Failed to calculate hash for $(basename "$file")${NC}"
+        exit 1
+    fi
+    
+    echo -e "${YELLOW}[VERIFY] Checking SHA256...${NC}"
     if [[ "${expected,,}" != "${actual,,}" ]]; then
         echo -e "${RED}[ERROR] Hash Mismatch for $(basename "$file")!${NC}"
         echo "Expected: $expected"
         echo "Actual:   $actual"
         exit 1
     fi
+    echo -e "${GREEN}  -> Hash verification passed${NC}"
 }
 
 # --- Main Execution ---
 
 check_system
-mkdir -p "${BINDIR}"
+
+# Check write permissions for BINDIR
+if ! mkdir -p "${BINDIR}" 2>/dev/null; then
+    echo -e "${RED}[ERROR] Cannot create directory: ${BINDIR}${NC}"
+    echo -e "${RED}Please check permissions or choose a different location.${NC}"
+    exit 1
+fi
+
+# Verify write permissions
+if [[ ! -w "${BINDIR}" ]]; then
+    echo -e "${RED}[ERROR] No write permission for: ${BINDIR}${NC}"
+    echo -e "${RED}Please fix permissions and try again.${NC}"
+    exit 1
+fi
 
 # ---------------------------------------------------------
 # 1. yt-dlp (AUTO-UPDATE Logic)
@@ -90,20 +150,31 @@ echo -e "${GREEN}[CHECK] yt-dlp...${NC}"
 download_file "$YTDLP_SUM_URL" "${TEMP_DIR}/yt_sums"
 LATEST_HASH=$(grep "yt-dlp_linux" "${TEMP_DIR}/yt_sums" | head -n 1 | awk '{print $1}')
 
+# Validate that we got a hash
+if [[ -z "$LATEST_HASH" ]]; then
+    echo -e "${RED}[ERROR] Could not extract yt-dlp hash from checksums file${NC}"
+    exit 1
+fi
+
 CURRENT_HASH=""
 
 if [[ -f "${BINDIR}/yt-dlp" ]]; then
     CURRENT_HASH=$(sha256sum "${BINDIR}/yt-dlp" | awk '{print $1}')
 fi
 
-if [[ "$LATEST_HASH" == "$CURRENT_HASH" ]]; then
+if [[ -n "$CURRENT_HASH" && "$LATEST_HASH" == "$CURRENT_HASH" ]]; then
     echo -e "${YELLOW}  -> yt-dlp is up to date.${NC}"
 else
     echo -e "${GREEN}  -> Downloading update...${NC}"
     download_file "$YTDLP_URL" "${TEMP_DIR}/yt-dlp"
     verify_hash "${TEMP_DIR}/yt-dlp" "$LATEST_HASH"
-    mv -f "${TEMP_DIR}/yt-dlp" "${BINDIR}/yt-dlp"
+    if ! mv -f "${TEMP_DIR}/yt-dlp" "${BINDIR}/yt-dlp" 2>/dev/null; then
+        echo -e "${RED}[ERROR] Failed to move yt-dlp to ${BINDIR}${NC}"
+        echo -e "${RED}Please check write permissions.${NC}"
+        exit 1
+    fi
     chmod +x "${BINDIR}/yt-dlp"
+    echo -e "${GREEN}  -> yt-dlp updated successfully${NC}"
 fi
 
 # ---------------------------------------------------------
@@ -134,13 +205,37 @@ else
 
     # 5. Install
     echo "  -> Extracting..."
-    tar -xJf "${TEMP_DIR}/ffmpeg-master-latest-linux64-gpl.tar.xz" -C "${TEMP_DIR}"
+    if ! tar -xJf "${TEMP_DIR}/ffmpeg-master-latest-linux64-gpl.tar.xz" -C "${TEMP_DIR}"; then
+        echo -e "${RED}[ERROR] Failed to extract FFmpeg archive${NC}"
+        exit 1
+    fi
 
     # We use find because the internal folder may change its name.
-    find "${TEMP_DIR}" -name "ffmpeg" -type f -exec mv -f {} "${BINDIR}/" \;
-    find "${TEMP_DIR}" -name "ffprobe" -type f -exec mv -f {} "${BINDIR}/" \;
-
+    FFMPEG_FOUND=$(find "${TEMP_DIR}" -name "ffmpeg" -type f | head -n 1)
+    FFPROBE_FOUND=$(find "${TEMP_DIR}" -name "ffprobe" -type f | head -n 1)
+    
+    if [[ -z "$FFMPEG_FOUND" ]]; then
+        echo -e "${RED}[ERROR] Could not find ffmpeg binary in extracted archive${NC}"
+        exit 1
+    fi
+    
+    if [[ -z "$FFPROBE_FOUND" ]]; then
+        echo -e "${RED}[ERROR] Could not find ffprobe binary in extracted archive${NC}"
+        exit 1
+    fi
+    
+    if ! mv -f "$FFMPEG_FOUND" "${BINDIR}/ffmpeg" 2>/dev/null; then
+        echo -e "${RED}[ERROR] Failed to move ffmpeg to ${BINDIR}${NC}"
+        echo -e "${RED}Please check write permissions.${NC}"
+        exit 1
+    fi
+    if ! mv -f "$FFPROBE_FOUND" "${BINDIR}/ffprobe" 2>/dev/null; then
+        echo -e "${RED}[ERROR] Failed to move ffprobe to ${BINDIR}${NC}"
+        echo -e "${RED}Please check write permissions.${NC}"
+        exit 1
+    fi
     chmod +x "${BINDIR}/ffmpeg" "${BINDIR}/ffprobe"
+    echo -e "${GREEN}  -> FFmpeg installed successfully${NC}"
 fi
 
 # ---------------------------------------------------------
@@ -155,12 +250,35 @@ else
     download_file "$DENO_URL" "${TEMP_DIR}/deno.zip"
 
     EXPECTED_DENO=$(grep "deno-x86_64-unknown-linux-gnu.zip" "${TEMP_DIR}/deno_sum" | awk '{print $1}')
+    
+    # Validate that we got a hash
+    if [[ -z "$EXPECTED_DENO" ]]; then
+        echo -e "${RED}[ERROR] Could not extract Deno hash from checksums file${NC}"
+        exit 1
+    fi
 
     verify_hash "${TEMP_DIR}/deno.zip" "$EXPECTED_DENO"
 
-    unzip -qo "${TEMP_DIR}/deno.zip" -d "${BINDIR}"
+    echo "  -> Extracting..."
+    if ! unzip -qo "${TEMP_DIR}/deno.zip" -d "${BINDIR}"; then
+        echo -e "${RED}[ERROR] Failed to extract Deno archive${NC}"
+        exit 1
+    fi
+    
+    if [[ ! -f "${BINDIR}/deno" ]]; then
+        echo -e "${RED}[ERROR] Deno binary not found after extraction${NC}"
+        exit 1
+    fi
+    
     chmod +x "${BINDIR}/deno"
+    echo -e "${GREEN}  -> Deno installed successfully${NC}"
 fi
 
 echo -e "${GREEN}[SUCCESS] Setup complete. Binaries ready in ${BINDIR}${NC}"
-echo "yt-dlp version: $("${BINDIR}/yt-dlp" --version)"
+
+# Verify yt-dlp works (but don't fail if it doesn't - it might be a compatibility issue)
+if "${BINDIR}/yt-dlp" --version >/dev/null 2>&1; then
+    echo "yt-dlp version: $("${BINDIR}/yt-dlp" --version)"
+else
+    echo -e "${YELLOW}[WARN] Could not verify yt-dlp version (binary may not be compatible)${NC}"
+fi
