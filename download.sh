@@ -22,6 +22,13 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+# Security: Prevent execution as root
+if [ "$EUID" -eq 0 ]; then
+    echo -e "${RED}[ERROR] Please do not run this script as root.${NC}"
+    echo -e "${RED}This script does not require root privileges and running as root is a security risk.${NC}"
+    exit 1
+fi
+
 # Function to verify binaries and permissions
 check_binary() {
     local bin_name="$1"
