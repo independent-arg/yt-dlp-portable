@@ -18,18 +18,15 @@ NC='\033[0m'
 # Cleanup temp on exit (success or fail)
 trap 'rm -rf "${TEMP_DIR}"' EXIT
 
-# --- Resources (Locked Versions: Linux x64) ---
-#YTDLP_URL="https://github.com/yt-dlp/yt-dlp/releases/download/2025.12.08/yt-dlp"
-#YTDLP_SHA256="aed043cabf6b352dfd5438afff595e31532538d5af7c8f4f95ced1e6f1b35c2a"
-
+# Linux (glibc 2.17+) standalone x86_64 binary
 YTDLP_URL="https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux"
 YTDLP_SUM_URL="https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS"
 
-FFMPEG_URL="https://github.com/yt-dlp/FFmpeg-Builds/releases/download/autobuild-2025-12-24-14-14/ffmpeg-N-122252-g548b28d5b1-linux64-gpl.tar.xz"
-FFMPEG_SHA256="ad2f7f3e0d5b04ccbb0ab5375982055e06189552a8a659fcb7ce4309932f28f4"
+FFMPEG_URL="https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+FFMPEG_SUM_URL="https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/checksums.sha256"
 
-NODE_URL="https://nodejs.org/dist/latest-v25.x/node-v25.2.1-linux-x64.tar.xz"
-NODE_SHA256="b9f6a97e81c89a9df45526b4f86dafdccaf12b82295f7bf35bdb2b0f5e68744f"
+DENO_URL="https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip"
+DENO_SUM_URL="https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip.sha256sum"
 
 # --- Helpers ---
 
@@ -37,7 +34,7 @@ check_system() {
     # 1. Check Dependencies
     for cmd in curl sha256sum tar xz find grep awk; do
         if ! command -v "$cmd" &> /dev/null; then
-            echo -e "${RED}[ERROR] Missing system tool: $cmd${NC}"
+            echo -e "${RED}[ERROR] Missing: $cmd${NC}"
             exit 1
         fi
     done
@@ -53,23 +50,21 @@ check_system() {
 download_file() {
     local url="$1"
     local dest="$2"
-    echo -e "${GREEN}[DOWNLOAD] ${url##*/}${NC}"
+    echo -e "${GREEN}[DOWNLOAD] $(basename "$url")${NC}"
     curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 "$url" -o "$dest"
 }
 
 verify_hash() {
-    local dest="$1"
-    local sha="$2"
+    local file="$1"
+    local expected="$2"
+    local actual=$(sha256sum "$file" | awk '{print $1}')
     echo "[VERIFY] Checking SHA256..."
-    echo "$sha  $dest" | sha256sum --check --status || {
-        echo -e "${RED}[ERROR] Hash mismatch for ${dest}${NC}"
+    if [[ "${expected,,}" != "${actual,,}" ]]; then
+        echo -e "${RED}[ERROR] Hash Mismatch for $(basename "$file")!${NC}"
+        echo "Expected: $expected"
+        echo "Actual:   $actual"
         exit 1
-    }
-}
-
-download_and_verify_static() {
-    download_file "$1" "$2"
-    verify_hash "$2" "$3"
+    fi
 }
 
 # --- Main Execution ---
@@ -80,55 +75,82 @@ mkdir -p "${BINDIR}"
 # ---------------------------------------------------------
 # 1. yt-dlp (AUTO-UPDATE Logic)
 # ---------------------------------------------------------
-echo -e "${GREEN}[INFO] Updating yt-dlp (Standalone)...${NC}"
+echo -e "${GREEN}[CHECK] yt-dlp...${NC}"
 
-download_file "$YTDLP_URL" "${TEMP_DIR}/yt-dlp_linux"
-download_file "$YTDLP_SUM_URL" "${TEMP_DIR}/SHA2-256SUMS"
+download_file "$YTDLP_SUM_URL" "${TEMP_DIR}/yt_sums"
+LATEST_HASH=$(grep "yt-dlp_linux" "${TEMP_DIR}/yt_sums" | head -n 1 | awk '{print $1}')
 
-EXPECTED_HASH=$(grep "yt-dlp_linux" "${TEMP_DIR}/SHA2-256SUMS" | head -n 1 | awk '{print $1}')
+CURRENT_HASH=""
 
-if [ -z "$EXPECTED_HASH" ]; then
-    echo -e "${RED}[ERROR] Could not extract hash for yt-dlp_linux${NC}"; exit 1
+if [[ -f "${BINDIR}/yt-dlp" ]]; then
+    CURRENT_HASH=$(sha256sum "${BINDIR}/yt-dlp" | awk '{print $1}')
 fi
 
-verify_hash "${TEMP_DIR}/yt-dlp_linux" "$EXPECTED_HASH"
-
-rm -f "${BINDIR}/yt-dlp" # Clean old
-mv "${TEMP_DIR}/yt-dlp_linux" "${BINDIR}/yt-dlp"
-chmod +x "${BINDIR}/yt-dlp"
+if [[ "$LATEST_HASH" == "$CURRENT_HASH" ]]; then
+    echo -e "${YELLOW}  -> yt-dlp is up to date.${NC}"
+else
+    echo -e "${GREEN}  -> Downloading update...${NC}"
+    download_file "$YTDLP_URL" "${TEMP_DIR}/yt-dlp"
+    verify_hash "${TEMP_DIR}/yt-dlp" "$LATEST_HASH"
+    mv -f "${TEMP_DIR}/yt-dlp" "${BINDIR}/yt-dlp"
+    chmod +x "${BINDIR}/yt-dlp"
+fi
 
 # ---------------------------------------------------------
 # 2. FFmpeg (Static Logic)
 # ---------------------------------------------------------
-rm -f "${BINDIR}/ffmpeg" "${BINDIR}/ffprobe" # Clean old
-download_and_verify_static "$FFMPEG_URL" "${TEMP_DIR}/ffmpeg.tar.xz" "$FFMPEG_SHA256"
+if [[ -x "${BINDIR}/ffmpeg" && -x "${BINDIR}/ffprobe" ]]; then
+    echo -e "${YELLOW}[CHECK] FFmpeg exists. Skipping.${NC}"
+else
+    echo -e "${GREEN}[INSTALL] FFmpeg (Latest)...${NC}"
 
-echo "[EXTRACT] FFmpeg..."
-tar -xf "${TEMP_DIR}/ffmpeg.tar.xz" -C "${TEMP_DIR}"
-find "${TEMP_DIR}" -type f -name "ffmpeg" -exec mv -f {} "${BINDIR}/" \;
-find "${TEMP_DIR}" -type f -name "ffprobe" -exec mv -f {} "${BINDIR}/" \;
+    # 1. Download Checksums file
+    download_file "$FFMPEG_SUM_URL" "${TEMP_DIR}/ffmpeg_sums"
 
-# Immediate validation
-if [[ ! -x "${BINDIR}/ffmpeg" ]]; then
-    echo -e "${RED}[ERROR] FFmpeg extraction failed.${NC}"; exit 1
+    # 2. Find the specific hash for the Linux64 GPL version
+    # The file contains lines such as: “hash filename”
+    EXPECTED_FF=$(grep "ffmpeg-master-latest-linux64-gpl.tar.xz" "${TEMP_DIR}/ffmpeg_sums" | head -n 1 | awk '{print $1}')
+
+    if [[ -z "$EXPECTED_FF" ]]; then
+        echo -e "${RED}[ERROR] Could not find FFmpeg hash in remote file!${NC}"
+        exit 1
+    fi
+
+    # 3. Download binary
+    download_file "$FFMPEG_URL" "${TEMP_DIR}/ffmpeg-master-latest-linux64-gpl.tar.xz"
+
+    # 4. Verify hash
+    verify_hash "${TEMP_DIR}/ffmpeg-master-latest-linux64-gpl.tar.xz" "$EXPECTED_FF"
+
+    # 5. Install
+    echo "  -> Extracting..."
+    tar -xJf "${TEMP_DIR}/ffmpeg-master-latest-linux64-gpl.tar.xz" -C "${TEMP_DIR}"
+
+    # We use find because the internal folder may change its name.
+    find "${TEMP_DIR}" -name "ffmpeg" -type f -exec mv -f {} "${BINDIR}/" \;
+    find "${TEMP_DIR}" -name "ffprobe" -type f -exec mv -f {} "${BINDIR}/" \;
+
+    chmod +x "${BINDIR}/ffmpeg" "${BINDIR}/ffprobe"
 fi
-chmod +x "${BINDIR}/ffmpeg" "${BINDIR}/ffprobe"
 
 # ---------------------------------------------------------
-# 3. Node.js (Static Logic)
+# 3. Deno (Static Logic)
 # ---------------------------------------------------------
-rm -f "${BINDIR}/node" # Clean old
-download_and_verify_static "$NODE_URL" "${TEMP_DIR}/node.tar.xz" "$NODE_SHA256"
+if [[ -x "${BINDIR}/deno" ]]; then
+    echo -e "${YELLOW}[CHECK] Deno exists. Skipping.${NC}"
+else
+    echo -e "${GREEN}[INSTALL] Deno (JS Runtime)...${NC}"
 
-echo "[EXTRACT] Node.js..."
-tar -xf "${TEMP_DIR}/node.tar.xz" -C "${TEMP_DIR}"
-find "${TEMP_DIR}" -type f -name "node" -exec mv -f {} "${BINDIR}/" \;
+    download_file "$DENO_SUM_URL" "${TEMP_DIR}/deno_sum"
+    download_file "$DENO_URL" "${TEMP_DIR}/deno.zip"
 
-# Immediate validation
-if [[ ! -x "${BINDIR}/node" ]]; then
-    echo -e "${RED}[ERROR] Node.js extraction failed.${NC}"; exit 1
+    EXPECTED_DENO=$(grep "deno-x86_64-unknown-linux-gnu.zip" "${TEMP_DIR}/deno_sum" | awk '{print $1}')
+
+    verify_hash "${TEMP_DIR}/deno.zip" "$EXPECTED_DENO"
+
+    unzip -qo "${TEMP_DIR}/deno.zip" -d "${BINDIR}"
+    chmod +x "${BINDIR}/deno"
 fi
-chmod +x "${BINDIR}/node"
 
 echo -e "${GREEN}[SUCCESS] Setup complete. Binaries ready in ${BINDIR}${NC}"
 echo "yt-dlp version: $("${BINDIR}/yt-dlp" --version)"
