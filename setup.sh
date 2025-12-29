@@ -20,6 +20,13 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+# Security: Prevent execution as root
+if [ "$EUID" -eq 0 ]; then
+    echo -e "${RED}[ERROR] Please do not run this script as root.${NC}"
+    echo -e "${RED}This script installs binaries to a local directory and does not require root privileges.${NC}"
+    exit 1
+fi
+
 TEMP_DIR=$(mktemp -d)
 if [[ ! -d "$TEMP_DIR" ]]; then
     echo -e "${RED}[ERROR] Failed to create temporary directory${NC}"
