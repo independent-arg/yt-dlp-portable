@@ -6,9 +6,9 @@ A shell wrapper for `yt-dlp` designed for portability.
 This project requires the following binaries inside the `bin/` folder:
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 - [FFmpeg](https://github.com/yt-dlp/FFmpeg-Builds)
-- [Node.js](https://nodejs.org) (for JS challenges)
+- [Deno](https://github.com/denoland/deno) (for JS challenges)
 
-> **Note:** An external JavaScript runtime (like Node.js or Deno) is now required for full YouTube support. yt-dlp uses it to solve JavaScript challenges presented by the platform. [Read more](https://github.com/yt-dlp/yt-dlp/issues/15012).
+> **Note:** An external JavaScript runtime (like Deno or Node.js) is now required for full YouTube support. yt-dlp uses it to solve JavaScript challenges presented by the platform. [Read more](https://github.com/yt-dlp/yt-dlp/issues/15012).
 
 ## Installation
 1. **Clone this repository**:
@@ -40,9 +40,9 @@ yt-dlp-portable/
 ├── download.sh      # Main execution script
 ├── setup.sh         # Environment provisioning & verification
 ├── bin/
+│   ├── deno
 │   ├── ffmpeg
 │   ├── ffprobe
-│   ├── node
 │   └── yt-dlp
 └── downloads/       # Automatically created
 ```
@@ -50,6 +50,6 @@ yt-dlp-portable/
 
 ---
 
-This script is a wrapper. All third-party tools (yt-dlp, FFmpeg, Node.js) belong to their respective owners and are subject to their own licenses.
+This script is a wrapper. All third-party tools (yt-dlp, FFmpeg, deno) belong to their respective owners and are subject to their own licenses.
 
 ---
