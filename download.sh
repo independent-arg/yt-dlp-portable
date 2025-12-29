@@ -11,7 +11,7 @@ trap 'echo -e "\n[INFO] Download interrupted by user."; exit 130' INT
 BASEDIR=$(dirname "$(readlink -f "$0")")
 BINDIR="$BASEDIR/bin"
 
-# Colors for messages (optional, improves readability)
+# Colors for messages
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m' # No Color
@@ -35,7 +35,7 @@ check_binary() {
 
 # 1. Verify all required binaries
 check_binary "yt-dlp"
-check_binary "node"
+check_binary "deno"
 check_binary "ffmpeg"
 check_binary "ffprobe"
 
@@ -70,7 +70,7 @@ echo -e "${GREEN}[INFO] Starting yt-dlp from portable environment...${NC}"
   --user-agent "$RANDOM_USER_AGENT" \
   --referer "https://www.youtube.com/" \
   --sleep-requests 1.5 \
-  --js-runtimes "node:${BINDIR}/node" \
+  --js-runtimes "deno:${BINDIR}/deno" \
   --ffmpeg-location "${BINDIR}/ffmpeg" \
   --concurrent-fragments 5 \
   -f "bv+(251/mergeall[format_id~=251-]/140/mergeall[format_id~=140-])/b" \
