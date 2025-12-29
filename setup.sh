@@ -52,7 +52,8 @@ check_system() {
     done
 
     # 2. Check Architecture (Crucial for static binaries)
-    local arch=$(uname -m)
+    local arch
+    arch=$(uname -m)
     if [[ "$arch" != "x86_64" ]]; then
         echo -e "${YELLOW}[WARN] Your system is $arch. These binaries are for x86_64 and may not work.${NC}"
         read -p "Continue anyway? (y/N): " -n 1 -r
@@ -108,7 +109,8 @@ verify_hash() {
         exit 1
     fi
     
-    local actual=$(sha256sum "$file" | awk '{print $1}')
+    local actual
+    actual=$(sha256sum "$file" | awk '{print $1}')
     if [[ -z "$actual" ]]; then
         echo -e "${RED}[ERROR] Failed to calculate hash for $(basename "$file")${NC}"
         exit 1
