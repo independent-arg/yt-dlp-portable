@@ -27,6 +27,7 @@ This will download the required binaries to the `bin/` folder.
 ./setup.sh
 
 ```
+![setupsh](https://github.com/user-attachments/assets/bff44891-0431-44ef-a1e5-571e7c8ffb2f)
 *Wait for the process to finish. It will verify the hashes of the downloaded files.*
 
 ## Usage
