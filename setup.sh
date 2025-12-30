@@ -1,8 +1,15 @@
 #!/bin/bash
 
-# yt-dlp-portable
+# ==============================================================================
+# Script Name: yt-dlp-portable (setup.sh)
+# Version:     v0.5.1
+# Author:      independent-arg
+# License:     MIT
+# ==============================================================================
 
 set -euo pipefail
+
+readonly VERSION="v0.5.1"
 
 # Paths
 # Robust path resolution (works on Linux, macOS, BSD)
@@ -18,7 +25,7 @@ BINDIR="${BASEDIR}/bin"
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
-NC='\033[0m'
+NC='\033[0m' # No Color
 
 # Security: Prevent execution as root
 if [ "$EUID" -eq 0 ]; then
