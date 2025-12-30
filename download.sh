@@ -1,8 +1,15 @@
 #!/bin/bash
-# yt-dlp-portable - download.sh
 
-# Strict mode: stops execution on errors, undefined variables, or pipe failures
+# ==============================================================================
+# Script Name: yt-dlp-portable (download.sh)
+# Version:     v0.5.1
+# Author:      independent-arg
+# License:     MIT
+# ==============================================================================
+
 set -euo pipefail
+
+readonly VERSION="v0.5.1"
 
 # Function to handle interruptions (Ctrl+C)
 trap 'echo -e "\n${YELLOW}[INFO] Download interrupted by user.${NC}"; exit 130' INT
