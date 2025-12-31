@@ -2,15 +2,15 @@
 
 # ==============================================================================
 # Script Name: yt-dlp-portable (setup.sh)
-# Version:     v0.6.0-beta1
+# Version:     v0.6.1
 # Author:      independent-arg
 # License:     MIT
 # ==============================================================================
 
 set -euo pipefail
 
-readonly VERSION="v0.6.0"
-readonly LAST_UPDATED="2025-12-30"
+readonly VERSION="v0.6.1"
+readonly LAST_UPDATED="2025-12-31"
 
 # Paths
 # Robust path resolution (works on Linux, macOS, BSD)
