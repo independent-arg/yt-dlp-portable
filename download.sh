@@ -28,6 +28,7 @@ BINDIR="$BASEDIR/bin"
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Security: Prevent execution as root
@@ -51,6 +52,24 @@ check_binary() {
     if [ ! -x "$bin_path" ]; then
         echo -e "${YELLOW}[WARN] Fixing execution permissions for $bin_name...${NC}"
         chmod +x "$bin_path"
+    fi
+}
+
+# Check disk space before download
+check_disk_space() {
+    local available
+    available=$(df -P . | awk 'NR==2 {print $4}')
+    local available_mb=$((available / 1024))
+
+    if [ "$available" -lt 1048576 ]; then  # Less than 1GB
+        echo -e "${YELLOW}[WARN] Low disk space: ${available_mb}MB available${NC}"
+        echo -e "${YELLOW}Large downloads may fail. Consider freeing up space.${NC}"
+        read -rp "Continue anyway? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}Download cancelled by user.${NC}"
+            exit 0
+        fi
     fi
 }
 
@@ -98,19 +117,35 @@ fi
 # Basic URL validation function
 validate_url() {
     local url="$1"
+
     # Basic check: URL should start with http:// or https://
     if [[ ! "$url" =~ ^https?:// ]]; then
+        echo -e "${RED}[ERROR] URL must start with http:// or https://${NC}"
         return 1
     fi
+
+    # Check basic URL format (must have domain with TLD)
+    if [[ ! "$url" =~ ^https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,} ]]; then
+        echo -e "${YELLOW}[WARN] URL format looks suspicious: $url${NC}"
+        return 1
+    fi
+
+    # Check URL length (prevent extremely long URLs)
+    if [ ${#url} -gt 2048 ]; then
+        echo -e "${RED}[ERROR] URL is too long (max 2048 characters)${NC}"
+        return 1
+    fi
+
     # Check for common video platform patterns
     if [[ "$url" =~ (youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com|twitch\.tv) ]]; then
         return 0
     fi
+
     # Allow other URLs (yt-dlp supports many platforms)
     return 0
 }
 
-# Validate URLs
+# Validate all provided URLs
 for url in "${URL_ARGS[@]}"; do
     if ! validate_url "$url"; then
         echo -e "${YELLOW}[WARN] URL may be invalid: $url${NC}"
@@ -142,35 +177,15 @@ generate_random_user_agent() {
     firefox_ver=$(random_num 140 146)
     os=$(random_num 1 3)
     
+    # Use simple assignment instead of arrays for better compatibility
     case $chrome_major in
-        137) 
-            local versions=("137.0.7151.68")
-            chrome_ver="${versions[0]}"
-            ;;
-        138) 
-            local versions=("138.0.7204.49" "138.0.7204.50")
-            chrome_ver="${versions[$(random_num 0 1)]}"
-            ;;
-        139) 
-            local versions=("139.0.7260.40")
-            chrome_ver="${versions[0]}"
-            ;;
-        140) 
-            local versions=("140.0.7339.128")
-            chrome_ver="${versions[0]}"
-            ;;
-        141) 
-            local versions=("141.0.7390.54" "141.0.7390.55")
-            chrome_ver="${versions[$(random_num 0 1)]}"
-            ;;
-        142) 
-            local versions=("142.0.7444.59" "142.0.7444.60")
-            chrome_ver="${versions[$(random_num 0 1)]}"
-            ;;
-        143) 
-            local versions=("143.0.7499.40" "143.0.7499.41")
-            chrome_ver="${versions[$(random_num 0 1)]}"
-            ;;
+        137) chrome_ver="137.0.7151.68" ;;
+        138) chrome_ver="138.0.7204.50" ;;
+        139) chrome_ver="139.0.7260.40" ;;
+        140) chrome_ver="140.0.7339.128" ;;
+        141) chrome_ver="141.0.7390.55" ;;
+        142) chrome_ver="142.0.7444.60" ;;
+        143) chrome_ver="143.0.7499.41" ;;
     esac
     
     case $os in
@@ -188,11 +203,15 @@ generate_random_user_agent() {
 RANDOM_USER_AGENT=$(generate_random_user_agent)
 
 # Initial banner
-echo -e "${GREEN}============================================${NC}"
-echo -e "${GREEN}      yt-dlp-portable independent-arg       ${NC}"
-echo -e "${GREEN}============================================${NC}"
+echo -e "${BLUE}============================================${NC}"
+echo -e "${BLUE}      yt-dlp-portable independent-arg       ${NC}"
+echo -e "${BLUE}               v${VERSION}                  ${NC}"
+echo -e "${BLUE}============================================${NC}"
 
-echo -e "${GREEN}[STEALTH] Identity assigned: $RANDOM_USER_AGENT${NC}"
+echo -e "${GREEN}[STEALTH] User-Agent: $RANDOM_USER_AGENT${NC}"
+
+# Check available disk space
+check_disk_space
 
 # Default options (quick mode)
 declare -A OPTIONS
@@ -227,6 +246,7 @@ show_subtitles_menu() {
             OPTIONS[subtitles]="no"
             OPTIONS[write_subs]="no"
             OPTIONS[embed_subs]="no"
+            echo -e "${GREEN}✓ Subtitles disabled${NC}"
             ;;
         2)
             OPTIONS[subtitles]="yes"
@@ -240,6 +260,7 @@ show_subtitles_menu() {
                 sub_lang="all"
             fi
             OPTIONS[subtitles_lang]="$sub_lang"
+            echo -e "${GREEN}✓ Will download subtitles: $sub_lang${NC}"
             ;;
         3)
             OPTIONS[subtitles]="yes"
@@ -253,6 +274,7 @@ show_subtitles_menu() {
                 sub_lang="all"
             fi
             OPTIONS[subtitles_lang]="$sub_lang"
+            echo -e "${GREEN}✓ Will embed subtitles: $sub_lang${NC}"
             ;;
         4)
             OPTIONS[subtitles]="yes"
@@ -266,6 +288,7 @@ show_subtitles_menu() {
                 sub_lang="all"
             fi
             OPTIONS[subtitles_lang]="$sub_lang"
+            echo -e "${GREEN}✓ Will download and embed subtitles: $sub_lang${NC}"
             ;;
         5)
             return
@@ -291,18 +314,22 @@ show_thumbnail_menu() {
         1)
             OPTIONS[embed_thumbnail]="yes"
             OPTIONS[convert_thumbnails]="jpg"
+            echo -e "${GREEN}✓ Will embed thumbnail as JPG${NC}"
             ;;
         2)
             OPTIONS[embed_thumbnail]="yes"
             OPTIONS[convert_thumbnails]=""
+            echo -e "${GREEN}✓ Will embed thumbnail (original format)${NC}"
             ;;
         3)
             OPTIONS[embed_thumbnail]="yes"
             OPTIONS[convert_thumbnails]="png"
+            echo -e "${GREEN}✓ Will embed thumbnail as PNG${NC}"
             ;;
         4)
             OPTIONS[embed_thumbnail]="no"
             OPTIONS[convert_thumbnails]=""
+            echo -e "${GREEN}✓ Thumbnail disabled${NC}"
             ;;
         5)
             return
@@ -331,19 +358,23 @@ show_format_menu() {
     case $format_choice in
         1)
             OPTIONS[format]="bestvideo+bestaudio/best"
+            echo -e "${GREEN}✓ Format: Best video + best audio${NC}"
             ;;
         2)
             OPTIONS[format]="best"
+            echo -e "${GREEN}✓ Format: Best (quick download)${NC}"
             ;;
         3)
             OPTIONS[format]="bestvideo"
+            echo -e "${GREEN}✓ Format: Video only${NC}"
             ;;
         4)
             OPTIONS[format]="bestaudio"
+            echo -e "${GREEN}✓ Format: Audio only${NC}"
             ;;
         5)
             echo ""
-            echo "Options: 2160p, 1440p, 1080p, 720p, 480p, 360p, 240p, 144p"
+            echo "Available options: 2160p, 1440p, 1080p, 720p, 480p, 360p, 240p, 144p"
             read -rp "Select quality (e.g., 1080p): " quality
             # Sanitize input: remove any non-alphanumeric characters except 'p'
             quality=$(echo "$quality" | tr -cd '0-9p')
@@ -351,6 +382,7 @@ show_format_menu() {
                 # Remove 'p' if present for height calculation
                 height_num=$(echo "$quality" | tr -d 'p')
                 OPTIONS[format]="bestvideo[height<=${height_num}]+bestaudio/best[height<=${height_num}]"
+                echo -e "${GREEN}✓ Format: Up to ${height_num}p${NC}"
             else
                 echo -e "${RED}Invalid quality format. Using default.${NC}"
             fi
@@ -362,8 +394,16 @@ show_format_menu() {
             read -rp "Format: " custom_format
             if [[ -n "$custom_format" ]]; then
                 # Basic sanitization: remove dangerous characters but allow yt-dlp format syntax
-                custom_format=$(echo "$custom_format" | tr -d '\n\r\t')
+                custom_format=$(echo "$custom_format" | tr -cd 'a-zA-Z0-9+\-/\[\]\(\)=<>:')
                 OPTIONS[format]="$custom_format"
+
+                if [[ -z "$custom_format" ]]; then
+                    echo -e "${RED}Invalid characters detected. Using default format.${NC}"
+                    OPTIONS[format]="bestvideo+bestaudio/best"
+                else
+                    OPTIONS[format]="$custom_format"
+                    echo -e "${GREEN}✓ Format: $custom_format${NC}"
+                fi
             fi
             ;;
         7)
@@ -390,15 +430,19 @@ show_output_menu() {
     case $output_choice in
         1)
             OPTIONS[output_template]="%(title)s [%(id)s].%(ext)s"
+            echo -e "${GREEN}✓ Template: Title [ID].ext${NC}"
             ;;
         2)
             OPTIONS[output_template]="%(title)s.%(ext)s"
+            echo -e "${GREEN}✓ Template: Title.ext${NC}"
             ;;
         3)
             OPTIONS[output_template]="%(id)s.%(ext)s"
+            echo -e "${GREEN}✓ Template: ID.ext${NC}"
             ;;
         4)
             OPTIONS[output_template]="%(title)s - %(uploader)s [%(id)s].%(ext)s"
+            echo -e "${GREEN}✓ Template: Title - Channel [ID].ext${NC}"
             ;;
         5)
             echo ""
@@ -409,6 +453,7 @@ show_output_menu() {
                 # Basic sanitization: remove newlines and carriage returns
                 custom_template=$(echo "$custom_template" | tr -d '\n\r')
                 OPTIONS[output_template]="$custom_template"
+                echo -e "${GREEN}✓ Custom template applied${NC}"
             fi
             ;;
         6)
@@ -436,37 +481,47 @@ show_advanced_menu() {
         1)
             if [ "${OPTIONS[verbose]}" == "yes" ]; then
                 OPTIONS[verbose]="no"
+                echo -e "${YELLOW}✓ Verbose mode disabled${NC}"
             else
                 OPTIONS[verbose]="yes"
+                echo -e "${GREEN}✓ Verbose mode enabled${NC}"
             fi
             show_advanced_menu
             ;;
         2)
             if [ "${OPTIONS[restrict_filenames]}" == "yes" ]; then
                 OPTIONS[restrict_filenames]="no"
+                echo -e "${YELLOW}✓ Filename restrictions disabled${NC}"
             else
                 OPTIONS[restrict_filenames]="yes"
+                echo -e "${GREEN}✓ Filename restrictions enabled${NC}"
             fi
             show_advanced_menu
             ;;
         3)
             if [ "${OPTIONS[no_mtime]}" == "yes" ]; then
                 OPTIONS[no_mtime]="no"
+                echo -e "${YELLOW}✓ Will preserve original file date${NC}"
             else
                 OPTIONS[no_mtime]="yes"
+                echo -e "${GREEN}✓ Won't modify file date${NC}"
             fi
             show_advanced_menu
             ;;
         4)
             echo ""
             read -rp "Number of concurrent fragments [1-10]: " fragments
+
             # Sanitize: only digits
             fragments=$(echo "$fragments" | tr -cd '0-9')
-            if [[ -n "$fragments" && "$fragments" =~ ^[0-9]+$ ]] && [ "$fragments" -ge 1 ] && [ "$fragments" -le 10 ]; then
-                OPTIONS[concurrent_fragments]="$fragments"
+
+            if [[ -z "$fragments" ]]; then
+                echo -e "${RED}Invalid input. Keeping current value: ${OPTIONS[concurrent_fragments]}${NC}"
+            elif [ "$fragments" -lt 1 ] || [ "$fragments" -gt 10 ]; then
+                echo -e "${RED}Value must be between 1 and 10. Keeping current value: ${OPTIONS[concurrent_fragments]}${NC}"
             else
-                echo -e "${RED}Invalid value. Must be a number between 1 and 10.${NC}"
-                echo -e "${YELLOW}Keeping current value: ${OPTIONS[concurrent_fragments]}${NC}"
+                OPTIONS[concurrent_fragments]="$fragments"
+                echo -e "${GREEN}✓ Updated to: $fragments${NC}"
             fi
             show_advanced_menu
             ;;
@@ -475,18 +530,17 @@ show_advanced_menu() {
             read -rp "Sleep time in seconds (e.g., 1.5): " sleep_time
             # Sanitize: allow digits and one decimal point
             sleep_time=$(echo "$sleep_time" | tr -cd '0-9.')
+
             # Validate format: number with optional decimal, must be positive
-            if [[ -n "$sleep_time" && "$sleep_time" =~ ^[0-9]+\.?[0-9]*$ ]]; then
-                # Check if it's greater than 0 (basic check: not just "0" or "0.0")
-                if [[ "$sleep_time" != "0" && "$sleep_time" != "0.0" && "$sleep_time" != "0." ]]; then
-                    OPTIONS[sleep_requests]="$sleep_time"
-                else
-                    echo -e "${RED}Invalid value. Must be greater than 0.${NC}"
-                    echo -e "${YELLOW}Keeping current value: ${OPTIONS[sleep_requests]}s${NC}"
-                fi
+            if [[ -z "$sleep_time" ]]; then
+                echo -e "${RED}Invalid input. Keeping current value: ${OPTIONS[sleep_requests]}s${NC}"
+            elif [[ ! "$sleep_time" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+                echo -e "${RED}Invalid format. Keeping current value: ${OPTIONS[sleep_requests]}s${NC}"
+            elif [[ "$sleep_time" == "0" || "$sleep_time" == "0.0" || "$sleep_time" == "0." ]]; then
+                echo -e "${RED}Value must be greater than 0. Keeping current value: ${OPTIONS[sleep_requests]}s${NC}"
             else
-                echo -e "${RED}Invalid value. Must be a positive number.${NC}"
-                echo -e "${YELLOW}Keeping current value: ${OPTIONS[sleep_requests]}s${NC}"
+                OPTIONS[sleep_requests]="$sleep_time"
+                echo -e "${GREEN}✓ Updated to: ${sleep_time}s${NC}"
             fi
             show_advanced_menu
             ;;
@@ -538,11 +592,11 @@ show_main_menu() {
                 break
                 ;;
             8)
-                echo -e "${YELLOW}Download cancelled.${NC}"
+                echo -e "${YELLOW}Download cancelled by user.${NC}"
                 exit 0
                 ;;
             *)
-                echo -e "${RED}Invalid option${NC}"
+                echo -e "${RED}Invalid option Please select [1-8]${NC}"
                 ;;
         esac
     done
@@ -550,16 +604,19 @@ show_main_menu() {
 
 show_current_config() {
     echo ""
-    echo -e "${GREEN}=== Current Configuration ==="
-    echo -e "${NC}Format: ${OPTIONS[format]}"
-    echo "Thumbnail: $([ "${OPTIONS[embed_thumbnail]}" == "yes" ] && echo "Embed$([ -n "${OPTIONS[convert_thumbnails]}" ] && echo " (convert to ${OPTIONS[convert_thumbnails]})" || echo "")" || echo "Don't embed")"
-    echo "Subtitles: $([ "${OPTIONS[subtitles]}" == "yes" ] && echo "Yes$([ "${OPTIONS[write_subs]}" == "yes" ] && echo " (download)" || echo "")$([ "${OPTIONS[embed_subs]}" == "yes" ] && echo " (embed)" || echo "")$([ -n "${OPTIONS[subtitles_lang]}" ] && echo " - Language: ${OPTIONS[subtitles_lang]}" || echo "")" || echo "No")"
-    echo "Output template: ${OPTIONS[output_template]}"
-    echo "Verbose mode: ${OPTIONS[verbose]}"
-    echo "Restrict filenames: ${OPTIONS[restrict_filenames]}"
-    echo "Don't modify date: ${OPTIONS[no_mtime]}"
-    echo "Concurrent fragments: ${OPTIONS[concurrent_fragments]}"
-    echo "Sleep time: ${OPTIONS[sleep_requests]}s"
+    echo -e "${GREEN}╔══════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║      Current configuration summary       ║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${BLUE}Format:${NC} ${OPTIONS[format]}"
+    echo -e "${BLUE}Thumbnail:${NC} $([ "${OPTIONS[embed_thumbnail]}" == "yes" ] && echo "Embed$([ -n "${OPTIONS[convert_thumbnails]}" ] && echo " (convert to ${OPTIONS[convert_thumbnails]})" || echo "")" || echo "Don't embed")"
+    echo -e "${BLUE}Subtitles:${NC} $([ "${OPTIONS[subtitles]}" == "yes" ] && echo "Yes$([ "${OPTIONS[write_subs]}" == "yes" ] && echo " (download)" || echo "")$([ "${OPTIONS[embed_subs]}" == "yes" ] && echo " (embed)" || echo "")$([ -n "${OPTIONS[subtitles_lang]}" ] && echo " - Language: ${OPTIONS[subtitles_lang]}" || echo "")" || echo "No")"
+    echo -e "${BLUE}Output template:${NC} ${OPTIONS[output_template]}"
+    echo -e "${BLUE}Verbose mode:${NC} ${OPTIONS[verbose]}"
+    echo -e "${BLUE}Restrict filenames:${NC} ${OPTIONS[restrict_filenames]}"
+    echo -e "${BLUE}Don't modify date:${NC} ${OPTIONS[no_mtime]}"
+    echo -e "${BLUE}Concurrent fragments:${NC} ${OPTIONS[concurrent_fragments]}"
+    echo -e "${BLUE}Sleep time:${NC} ${OPTIONS[sleep_requests]}s"
     echo ""
     read -rp "Press Enter to continue..."
 }
@@ -567,12 +624,18 @@ show_current_config() {
 # Build and execute yt-dlp command
 execute_ytdlp() {
     local cmd=("$BINDIR/yt-dlp")
+    local max_retries=3
+    local retry_count=0
+    local exit_code
+    local backoff_time=3
     
     # Base options
     if [ "${OPTIONS[verbose]}" == "yes" ]; then
         cmd+=(--verbose)
     fi
     
+    # ADDED: Socket timeout to prevent hanging
+    cmd+=(--socket-timeout 30)
     cmd+=(--user-agent "$RANDOM_USER_AGENT")
     cmd+=(--referer "https://www.youtube.com/")
     cmd+=(--sleep-requests "${OPTIONS[sleep_requests]}")
@@ -591,19 +654,14 @@ execute_ytdlp() {
     
     # Subtitle options
     if [ "${OPTIONS[subtitles]}" == "yes" ]; then
-        if [ "${OPTIONS[write_subs]}" == "yes" ]; then
-            if [ -n "${OPTIONS[subtitles_lang]}" ] && [ "${OPTIONS[subtitles_lang]}" != "all" ]; then
-                cmd+=(--write-subs --sub-langs "${OPTIONS[subtitles_lang]}")
-            else
-                cmd+=(--write-subs --sub-langs all)
-            fi
-        fi
+        local sub_lang="${OPTIONS[subtitles_lang]}"
+        [[ -z "$sub_lang" || "$sub_lang" == "all" ]] && sub_lang="all"
+
+        # If embed is enabled, it automatically downloads first
         if [ "${OPTIONS[embed_subs]}" == "yes" ]; then
-            if [ -n "${OPTIONS[subtitles_lang]}" ] && [ "${OPTIONS[subtitles_lang]}" != "all" ]; then
-                cmd+=(--embed-subs --sub-langs "${OPTIONS[subtitles_lang]}")
-            else
-                cmd+=(--embed-subs --sub-langs all)
-            fi
+            cmd+=(--embed-subs --sub-langs "$sub_lang")
+        elif [ "${OPTIONS[write_subs]}" == "yes" ]; then
+            cmd+=(--write-subs --sub-langs "$sub_lang")
         fi
     fi
     
@@ -621,11 +679,39 @@ execute_ytdlp() {
     # Add URL arguments
     cmd+=("${URL_ARGS[@]}")
     
-    # Execute the command directly
-    if ! "${cmd[@]}"; then
-        return $?
-    fi
-    return 0
+    # IMPLEMENTED: Automatic retry mechanism with exponential backoff
+    while [ $retry_count -lt $max_retries ]; do
+        if "${cmd[@]}"; then
+            return 0
+        else
+            exit_code=$?
+            retry_count=$((retry_count + 1))
+
+            # Don't retry if user cancelled (Ctrl+C)
+            if [ $exit_code -eq 130 ]; then
+                return $exit_code
+            fi
+
+            if [ $retry_count -lt $max_retries ]; then
+                echo ""
+                echo -e "${YELLOW}╔═══════════════════════════════════════════════════════╗${NC}"
+                echo -e "${YELLOW}║  Download failed - Attempt $retry_count/$max_retries  ║${NC}"
+                echo -e "${YELLOW}╚═══════════════════════════════════════════════════════╝${NC}"
+                echo -e "${YELLOW}Retrying in ${backoff_time} seconds...${NC}"
+                sleep $backoff_time
+                # Exponential backoff: 3s, 6s, 12s
+                backoff_time=$((backoff_time * 2))
+            else
+                echo ""
+                echo -e "${RED}╔════════════════════════════════════════════════╗${NC}"
+                echo -e "${RED}║  All $max_retries attempts failed - Giving up  ║${NC}"
+                echo -e "${RED}╚════════════════════════════════════════════════╝${NC}"
+                return $exit_code
+            fi
+        fi
+    done
+
+    return $exit_code
 }
 
 # Main execution
@@ -659,7 +745,11 @@ if ! execute_ytdlp; then
             echo -e "${YELLOW}Check the error messages above for details.${NC}"
             ;;
     esac
+    echo ""
+    echo -e "${BLUE}Need help? Check the documentation or try:${NC}"
+    echo "  ./download.sh --help"
     exit $exit_code
 fi
 
 echo -e "${GREEN}[SUCCESS] Process finished successfully.${NC}"
+
