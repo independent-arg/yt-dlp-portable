@@ -205,7 +205,7 @@ RANDOM_USER_AGENT=$(generate_random_user_agent)
 # Initial banner
 echo -e "${BLUE}============================================${NC}"
 echo -e "${BLUE}      yt-dlp-portable independent-arg       ${NC}"
-echo -e "${BLUE}               v${VERSION}                  ${NC}"
+echo -e "${BLUE}               ${VERSION}                   ${NC}"
 echo -e "${BLUE}============================================${NC}"
 
 echo -e "${GREEN}[STEALTH] User-Agent: $RANDOM_USER_AGENT${NC}"
@@ -314,21 +314,25 @@ show_thumbnail_menu() {
         1)
             OPTIONS[embed_thumbnail]="yes"
             OPTIONS[convert_thumbnails]="jpg"
-            echo -e "${GREEN}✓ Will embed thumbnail as JPG${NC}"
+            OPTIONS[merge_output_format]="mkv"
+            echo -e "${GREEN}✓ Will embed JPG thumbnail (output will be MKV)${NC}"
             ;;
         2)
             OPTIONS[embed_thumbnail]="yes"
             OPTIONS[convert_thumbnails]=""
+            OPTIONS[merge_output_format]=""
             echo -e "${GREEN}✓ Will embed thumbnail (original format)${NC}"
             ;;
         3)
             OPTIONS[embed_thumbnail]="yes"
             OPTIONS[convert_thumbnails]="png"
+            OPTIONS[merge_output_format]=""
             echo -e "${GREEN}✓ Will embed thumbnail as PNG${NC}"
             ;;
         4)
             OPTIONS[embed_thumbnail]="no"
             OPTIONS[convert_thumbnails]=""
+            OPTIONS[merge_output_format]=""
             echo -e "${GREEN}✓ Thumbnail disabled${NC}"
             ;;
         5)
@@ -652,6 +656,10 @@ execute_ytdlp() {
         fi
     fi
     
+    if [ -n "${OPTIONS[merge_output_format]}" ]; then
+        cmd+=(--merge-output-format "${OPTIONS[merge_output_format]}")
+    fi
+
     # Subtitle options
     if [ "${OPTIONS[subtitles]}" == "yes" ]; then
         local sub_lang="${OPTIONS[subtitles_lang]}"
@@ -752,4 +760,3 @@ if ! execute_ytdlp; then
 fi
 
 echo -e "${GREEN}[SUCCESS] Process finished successfully.${NC}"
-
