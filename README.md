@@ -60,6 +60,8 @@ Launch the interactive configuration menu:
 ```bash
 ./download.sh "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
+<img width="1576" height="520" alt="download" src="https://github.com/user-attachments/assets/e64f8052-a61b-43d3-bd40-5581d382ec88" />
+
 
 The interactive menu allows you to configure:
 
