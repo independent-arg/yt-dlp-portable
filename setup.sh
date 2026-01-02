@@ -13,7 +13,6 @@ readonly VERSION="v0.6.1"
 readonly LAST_UPDATED="2025-12-31"
 
 # Paths
-# Robust path resolution (works on Linux, macOS, BSD)
 if command -v readlink >/dev/null 2>&1 && readlink -f "$0" >/dev/null 2>&1; then
     BASEDIR=$(dirname "$(readlink -f "$0")")
 else
@@ -65,6 +64,11 @@ check_system() {
             exit 1
         fi
     done
+
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        echo -e "${RED}[ERROR] This script currently supports Linux only.${NC}"
+        exit 1
+    fi
 
     # 2. Check Architecture (Crucial for static binaries)
     local arch

@@ -114,101 +114,13 @@ if [ ${#URL_ARGS[@]} -eq 0 ]; then
     exit 1
 fi
 
-# Basic URL validation function
-validate_url() {
-    local url="$1"
-
-    # Basic check: URL should start with http:// or https://
-    if [[ ! "$url" =~ ^https?:// ]]; then
-        echo -e "${RED}[ERROR] URL must start with http:// or https://${NC}"
-        return 1
-    fi
-
-    # Check basic URL format (must have domain with TLD)
-    if [[ ! "$url" =~ ^https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,} ]]; then
-        echo -e "${YELLOW}[WARN] URL format looks suspicious: $url${NC}"
-        return 1
-    fi
-
-    # Check URL length (prevent extremely long URLs)
-    if [ ${#url} -gt 2048 ]; then
-        echo -e "${RED}[ERROR] URL is too long (max 2048 characters)${NC}"
-        return 1
-    fi
-
-    # Check for common video platform patterns
-    if [[ "$url" =~ (youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com|twitch\.tv) ]]; then
-        return 0
-    fi
-
-    # Allow other URLs (yt-dlp supports many platforms)
-    return 0
-}
-
-# Validate all provided URLs
-for url in "${URL_ARGS[@]}"; do
-    if ! validate_url "$url"; then
-        echo -e "${YELLOW}[WARN] URL may be invalid: $url${NC}"
-        echo -e "${YELLOW}Continuing anyway (yt-dlp will validate)...${NC}"
-    fi
-done
-
-# Function to get a random number (using urandom if available)
-random_num() {
-    local min=$1
-    local max=$2
-    local rand
-    if [[ -r /dev/urandom ]]; then
-        rand=$(od -An -N2 -tu2 /dev/urandom | tr -d ' ')
-        echo $((min + (rand % (max - min + 1))))
-    else
-        echo $((min + (RANDOM % (max - min + 1))))
-    fi
-}
-
-# Generate random user agent
-generate_random_user_agent() {
-    local chrome_major
-    local firefox_ver
-    local os
-    local chrome_ver
-    
-    chrome_major=$(random_num 137 143)
-    firefox_ver=$(random_num 140 146)
-    os=$(random_num 1 3)
-    
-    # Use simple assignment instead of arrays for better compatibility
-    case $chrome_major in
-        137) chrome_ver="137.0.7151.68" ;;
-        138) chrome_ver="138.0.7204.50" ;;
-        139) chrome_ver="139.0.7260.40" ;;
-        140) chrome_ver="140.0.7339.128" ;;
-        141) chrome_ver="141.0.7390.55" ;;
-        142) chrome_ver="142.0.7444.60" ;;
-        143) chrome_ver="143.0.7499.41" ;;
-    esac
-    
-    case $os in
-        1) local os_str="Windows NT 10.0; Win64; x64" ;;
-        2) local os_str="X11; Linux x86_64" ;;
-        3) local os_str="Macintosh; Intel Mac OS X 26_0" ;;
-    esac
-    
-    case $(random_num 1 2) in
-        1) echo "Mozilla/5.0 ($os_str) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome_ver} Safari/537.36" ;;
-        2) echo "Mozilla/5.0 ($os_str; rv:${firefox_ver}.0) Gecko/20100101 Firefox/${firefox_ver}.0" ;;
-    esac
-}
-
-RANDOM_USER_AGENT=$(generate_random_user_agent)
-
 # Initial banner
 echo -e "${BLUE}============================================${NC}"
 echo -e "${BLUE}      yt-dlp-portable independent-arg       ${NC}"
 echo -e "${BLUE}               ${VERSION}                   ${NC}"
 echo -e "${BLUE}============================================${NC}"
 
-echo -e "${GREEN}[STEALTH] User-Agent: $RANDOM_USER_AGENT${NC}"
+echo -e "${GREEN}[INFO] Identity managed by yt-dlp internal handler${NC}"
 
 # Check available disk space
 check_disk_space
@@ -361,8 +273,8 @@ show_format_menu() {
     
     case $format_choice in
         1)
-            OPTIONS[format]="bestvideo+bestaudio/best"
-            echo -e "${GREEN}✓ Format: Best video + best audio${NC}"
+            OPTIONS[format]="bestvideo*+bestaudio/best"
+            echo -e "${GREEN}✓ Format: Best video + best audio (Recommended)${NC}"
             ;;
         2)
             OPTIONS[format]="best"
@@ -628,20 +540,17 @@ show_current_config() {
 # Build and execute yt-dlp command
 execute_ytdlp() {
     local cmd=("$BINDIR/yt-dlp")
-    local max_retries=3
-    local retry_count=0
-    local exit_code
-    local backoff_time=3
     
     # Base options
     if [ "${OPTIONS[verbose]}" == "yes" ]; then
         cmd+=(--verbose)
     fi
     
-    # ADDED: Socket timeout to prevent hanging
     cmd+=(--socket-timeout 30)
-    cmd+=(--user-agent "$RANDOM_USER_AGENT")
-    cmd+=(--referer "https://www.youtube.com/")
+    cmd+=(--retries 10)
+    cmd+=(--fragment-retries 10)
+
+    # User-Agent and Referer are handled automatically by yt-dlp for better stability
     cmd+=(--sleep-requests "${OPTIONS[sleep_requests]}")
     cmd+=(--js-runtimes "deno:${BINDIR}/deno")
     cmd+=(--ffmpeg-location "${BINDIR}/ffmpeg")
@@ -686,40 +595,8 @@ execute_ytdlp() {
     
     # Add URL arguments
     cmd+=("${URL_ARGS[@]}")
-    
-    # IMPLEMENTED: Automatic retry mechanism with exponential backoff
-    while [ $retry_count -lt $max_retries ]; do
-        if "${cmd[@]}"; then
-            return 0
-        else
-            exit_code=$?
-            retry_count=$((retry_count + 1))
 
-            # Don't retry if user cancelled (Ctrl+C)
-            if [ $exit_code -eq 130 ]; then
-                return $exit_code
-            fi
-
-            if [ $retry_count -lt $max_retries ]; then
-                echo ""
-                echo -e "${YELLOW}╔═══════════════════════════════════════════════════════╗${NC}"
-                echo -e "${YELLOW}║  Download failed - Attempt $retry_count/$max_retries  ║${NC}"
-                echo -e "${YELLOW}╚═══════════════════════════════════════════════════════╝${NC}"
-                echo -e "${YELLOW}Retrying in ${backoff_time} seconds...${NC}"
-                sleep $backoff_time
-                # Exponential backoff: 3s, 6s, 12s
-                backoff_time=$((backoff_time * 2))
-            else
-                echo ""
-                echo -e "${RED}╔════════════════════════════════════════════════╗${NC}"
-                echo -e "${RED}║  All $max_retries attempts failed - Giving up  ║${NC}"
-                echo -e "${RED}╚════════════════════════════════════════════════╝${NC}"
-                return $exit_code
-            fi
-        fi
-    done
-
-    return $exit_code
+    "${cmd[@]}"
 }
 
 # Main execution
