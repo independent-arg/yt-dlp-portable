@@ -6,7 +6,7 @@ A portable, feature-rich shell wrapper for `yt-dlp` with interactive configurati
 
 - **Interactive Menu System**: Configure all download options through an intuitive menu interface
 - **Quick Mode**: Download with sensible defaults using `--quick` flag
-- **Stealth Mode**: Random user agents and request delays to avoid detection
+- **Stealth Mode**: Intelligent request delays and automatic user-agent handling by yt-dlp.
 - **Full Configuration**: Control format, quality, subtitles, thumbnails, filenames, and advanced options
 - **Multiple URLs**: Download multiple videos in a single command
 - **Portable**: All dependencies bundled in `bin/` directory
