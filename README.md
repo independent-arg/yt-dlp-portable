@@ -46,19 +46,19 @@ This will download the required binaries to the `bin/` folder.
 
 Download with default settings (best video+audio, embedded thumbnail, no subtitles):
 ```bash
-./download.sh --quick "https://www.youtube.com/watch?v=VIDEO_ID"
+./download.sh --quick "https://www.example.com/watch?v=example"
 ```
 
 Or use the short flag:
 ```bash
-./download.sh -q "https://www.youtube.com/watch?v=VIDEO_ID"
+./download.sh -q "https://www.example.com/watch?v=example"
 ```
 
 ### Interactive Mode
 
 Launch the interactive configuration menu:
 ```bash
-./download.sh "https://www.youtube.com/watch?v=VIDEO_ID"
+./download.sh "https://www.example.com/watch?v=example"
 ```
 <img width="1576" height="520" alt="download" src="https://github.com/user-attachments/assets/e64f8052-a61b-43d3-bd40-5581d382ec88" />
 
