@@ -127,9 +127,10 @@ check_disk_space
 
 # Default options (quick mode)
 declare -A OPTIONS
-OPTIONS[format]="bestvideo+bestaudio/best"
+OPTIONS[format]="bestvideo*+bestaudio/best"
 OPTIONS[embed_thumbnail]="yes"
 OPTIONS[convert_thumbnails]="jpg"
+OPTIONS[merge_output_format]="mkv"
 OPTIONS[subtitles]="no"
 OPTIONS[subtitles_lang]=""
 OPTIONS[embed_subs]="no"
@@ -611,7 +612,7 @@ echo ""
 echo -e "${GREEN}[INFO] Starting download...${NC}"
 echo ""
 
-# Execute yt-dlp
+# Execute yt-dlp with detailed error handling
 if ! execute_ytdlp; then
     exit_code=$?
     echo ""
