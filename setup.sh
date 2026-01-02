@@ -2,15 +2,15 @@
 
 # ==============================================================================
 # Script Name: yt-dlp-portable (setup.sh)
-# Version:     v0.6.1
+# Version:     v0.6.2
 # Author:      independent-arg
 # License:     MIT
 # ==============================================================================
 
 set -euo pipefail
 
-readonly VERSION="v0.6.1"
-readonly LAST_UPDATED="2025-12-31"
+readonly VERSION="v0.6.2"
+readonly LAST_UPDATED="2025-01-02"
 
 # Paths
 if command -v readlink >/dev/null 2>&1 && readlink -f "$0" >/dev/null 2>&1; then
@@ -88,9 +88,9 @@ download_file() {
     local dest="$2"
     local retries=3
     local attempt=1
-    
+
     echo -e "${GREEN}[DOWNLOAD] $(basename "$url")${NC}"
-    
+
     while [ $attempt -le $retries ]; do
         if curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 300 "$url" -o "$dest" 2>/dev/null; then
             # Verify file was downloaded and is not empty
@@ -103,11 +103,11 @@ download_file() {
         else
             echo -e "${YELLOW}[WARN] Download failed, retrying... (attempt $attempt/$retries)${NC}"
         fi
-        
+
         attempt=$((attempt + 1))
         sleep 2
     done
-    
+
     echo -e "${RED}[ERROR] Failed to download $(basename "$url") after $retries attempts${NC}"
     echo -e "${RED}Please check your internet connection and try again.${NC}"
     exit 1
@@ -116,25 +116,25 @@ download_file() {
 verify_hash() {
     local file="$1"
     local expected="$2"
-    
+
     # Validate inputs
     if [[ -z "$expected" ]]; then
         echo -e "${RED}[ERROR] Expected hash is empty for $(basename "$file")${NC}"
         exit 1
     fi
-    
+
     if [[ ! -f "$file" ]]; then
         echo -e "${RED}[ERROR] File not found for hash verification: $file${NC}"
         exit 1
     fi
-    
+
     local actual
     actual=$(sha256sum "$file" | awk '{print $1}')
     if [[ -z "$actual" ]]; then
         echo -e "${RED}[ERROR] Failed to calculate hash for $(basename "$file")${NC}"
         exit 1
     fi
-    
+
     echo -e "${YELLOW}[VERIFY] Checking SHA256...${NC}"
     if [[ "${expected,,}" != "${actual,,}" ]]; then
         echo -e "${RED}[ERROR] Hash Mismatch for $(basename "$file")!${NC}"
@@ -234,17 +234,17 @@ else
     # We use find because the internal folder may change its name.
     FFMPEG_FOUND=$(find "${TEMP_DIR}" -name "ffmpeg" -type f | head -n 1)
     FFPROBE_FOUND=$(find "${TEMP_DIR}" -name "ffprobe" -type f | head -n 1)
-    
+
     if [[ -z "$FFMPEG_FOUND" ]]; then
         echo -e "${RED}[ERROR] Could not find ffmpeg binary in extracted archive${NC}"
         exit 1
     fi
-    
+
     if [[ -z "$FFPROBE_FOUND" ]]; then
         echo -e "${RED}[ERROR] Could not find ffprobe binary in extracted archive${NC}"
         exit 1
     fi
-    
+
     if ! mv -f "$FFMPEG_FOUND" "${BINDIR}/ffmpeg" 2>/dev/null; then
         echo -e "${RED}[ERROR] Failed to move ffmpeg to ${BINDIR}${NC}"
         echo -e "${RED}Please check write permissions.${NC}"
@@ -271,7 +271,7 @@ else
     download_file "$DENO_URL" "${TEMP_DIR}/deno.zip"
 
     EXPECTED_DENO=$(grep "deno-x86_64-unknown-linux-gnu.zip" "${TEMP_DIR}/deno_sum" | awk '{print $1}')
-    
+
     # Validate that we got a hash
     if [[ -z "$EXPECTED_DENO" ]]; then
         echo -e "${RED}[ERROR] Could not extract Deno hash from checksums file${NC}"
@@ -285,12 +285,12 @@ else
         echo -e "${RED}[ERROR] Failed to extract Deno archive${NC}"
         exit 1
     fi
-    
+
     if [[ ! -f "${BINDIR}/deno" ]]; then
         echo -e "${RED}[ERROR] Deno binary not found after extraction${NC}"
         exit 1
     fi
-    
+
     chmod +x "${BINDIR}/deno"
     echo -e "${GREEN}  -> Deno installed successfully${NC}"
 fi

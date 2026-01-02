@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # ==============================================================================
-# Script Name: yt-dlp-portable (download.sh)
-# Version:     v0.6.1
+# Script Name: yt-dlp-portable (setup.sh)
+# Version:     v0.6.2
 # Author:      independent-arg
 # License:     MIT
 # ==============================================================================
 
 set -euo pipefail
 
-readonly VERSION="v0.6.1"
-readonly LAST_UPDATED="2025-12-31"
+readonly VERSION="v0.6.2"
+readonly LAST_UPDATED="2025-01-02"
 
 # Function to handle interruptions (Ctrl+C)
 trap 'echo -e "\n${YELLOW}[INFO] Download interrupted by user.${NC}"; exit 130' INT
@@ -153,7 +153,7 @@ show_subtitles_menu() {
     echo "5) Back to main menu"
     echo ""
     read -rp "Select an option [1-5]: " sub_choice
-    
+
     case $sub_choice in
         1)
             OPTIONS[subtitles]="no"
@@ -222,7 +222,7 @@ show_thumbnail_menu() {
     echo "5) Back to main menu"
     echo ""
     read -rp "Select an option [1-5]: " thumb_choice
-    
+
     case $thumb_choice in
         1)
             OPTIONS[embed_thumbnail]="yes"
@@ -271,7 +271,7 @@ show_format_menu() {
     echo "7) Back to main menu"
     echo ""
     read -rp "Select an option [1-7]: " format_choice
-    
+
     case $format_choice in
         1)
             OPTIONS[format]="bestvideo*+bestaudio/best"
@@ -343,7 +343,7 @@ show_output_menu() {
     echo "6) Back to main menu"
     echo ""
     read -rp "Select an option [1-6]: " output_choice
-    
+
     case $output_choice in
         1)
             OPTIONS[output_template]="%(title)s [%(id)s].%(ext)s"
@@ -393,7 +393,7 @@ show_advanced_menu() {
     echo "6) Back to main menu"
     echo ""
     read -rp "Select an option [1-6]: " adv_choice
-    
+
     case $adv_choice in
         1)
             if [ "${OPTIONS[verbose]}" == "yes" ]; then
@@ -485,7 +485,7 @@ show_main_menu() {
         echo "8) Cancel"
         echo ""
         read -rp "Select an option [1-8]: " main_choice
-        
+
         case $main_choice in
             1)
                 show_subtitles_menu
@@ -541,12 +541,12 @@ show_current_config() {
 # Build and execute yt-dlp command
 execute_ytdlp() {
     local cmd=("$BINDIR/yt-dlp")
-    
+
     # Base options
     if [ "${OPTIONS[verbose]}" == "yes" ]; then
         cmd+=(--verbose)
     fi
-    
+
     cmd+=(--socket-timeout 30)
     cmd+=(--retries 10)
     cmd+=(--fragment-retries 10)
@@ -557,7 +557,7 @@ execute_ytdlp() {
     cmd+=(--ffmpeg-location "${BINDIR}/ffmpeg")
     cmd+=(--concurrent-fragments "${OPTIONS[concurrent_fragments]}")
     cmd+=(-f "${OPTIONS[format]}")
-    
+
     # Thumbnail options
     if [ "${OPTIONS[embed_thumbnail]}" == "yes" ]; then
         cmd+=(--embed-thumbnail)
@@ -565,7 +565,7 @@ execute_ytdlp() {
             cmd+=(--convert-thumbnails "${OPTIONS[convert_thumbnails]}")
         fi
     fi
-    
+
     if [ -n "${OPTIONS[merge_output_format]}" ]; then
         cmd+=(--merge-output-format "${OPTIONS[merge_output_format]}")
     fi
@@ -582,18 +582,18 @@ execute_ytdlp() {
             cmd+=(--write-subs --sub-langs "$sub_lang")
         fi
     fi
-    
+
     # Output options
     if [ "${OPTIONS[restrict_filenames]}" == "yes" ]; then
         cmd+=(--restrict-filenames)
     fi
-    
+
     cmd+=(--output "${OPTIONS[output_template]}")
-    
+
     if [ "${OPTIONS[no_mtime]}" == "yes" ]; then
         cmd+=(--no-mtime)
     fi
-    
+
     # Add URL arguments
     cmd+=("${URL_ARGS[@]}")
 
