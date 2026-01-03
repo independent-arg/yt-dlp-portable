@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# Script Name: yt-dlp-portable (setup.sh)
+# Script Name: yt-dlp-portable (download.sh)
 # Version:     v0.6.2
 # Author:      independent-arg
 # License:     MIT
@@ -9,11 +9,23 @@
 
 set -euo pipefail
 
+# ==============================================================================
+# CONSTANTS & METADATA
+# ==============================================================================
+
 readonly VERSION="v0.6.2"
 readonly LAST_UPDATED="2025-01-02"
 
+# ==============================================================================
+# SIGNAL HANDLERS
+# ==============================================================================
+
 # Function to handle interruptions (Ctrl+C)
 trap 'echo -e "\n${YELLOW}[INFO] Download interrupted by user.${NC}"; exit 130' INT
+
+# ==============================================================================
+# PATH RESOLUTION
+# ==============================================================================
 
 # Robustly get the absolute path of the script directory
 if command -v readlink >/dev/null 2>&1 && readlink -f "$0" >/dev/null 2>&1; then
@@ -24,6 +36,10 @@ else
 fi
 BINDIR="$BASEDIR/bin"
 
+# ==============================================================================
+# UI CONSTANTS
+# ==============================================================================
+
 # Colors for messages
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -31,12 +47,18 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# ==============================================================================
+# SYSTEM VALIDATION FUNCTIONS
+# ==============================================================================
+
 # Security: Prevent execution as root
-if [ "$EUID" -eq 0 ]; then
-    echo -e "${RED}[ERROR] Please do not run this script as root.${NC}"
-    echo -e "${RED}This script does not require root privileges and running as root is a security risk.${NC}"
-    exit 1
-fi
+check_root() {
+    if [ "$EUID" -eq 0 ]; then
+        echo -e "${RED}[ERROR] Please do not run this script as root.${NC}"
+        echo -e "${RED}This script does not require root privileges and running as root is a security risk.${NC}"
+        exit 1
+    fi
+}
 
 # Function to verify binaries and permissions
 check_binary() {
@@ -73,59 +95,11 @@ check_disk_space() {
     fi
 }
 
-# Verify all required binaries
-check_binary "yt-dlp"
-check_binary "deno"
-check_binary "ffmpeg"
-check_binary "ffprobe"
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
 
-# Parse arguments for quick mode or URL
-QUICK_MODE=false
-URL_ARGS=()
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --quick|-q)
-            QUICK_MODE=true
-            shift
-            ;;
-        --help|-h)
-            echo "Usage: ./download.sh [OPTIONS] [URL]"
-            echo ""
-            echo "Options:"
-            echo "  -q, --quick    Use quick mode (default settings, no menu)"
-            echo "  -h, --help     Show this help message"
-            echo ""
-            echo "If no options are provided, an interactive menu will be shown."
-            exit 0
-            ;;
-        *)
-            URL_ARGS+=("$1")
-            shift
-            ;;
-    esac
-done
-
-# Check if URL was provided
-if [ ${#URL_ARGS[@]} -eq 0 ]; then
-    echo -e "${RED}Error: No URL provided.${NC}"
-    echo "Usage: ./download.sh [OPTIONS] [URL]"
-    echo "Example: ./download.sh https://www.youtube.com/watch?v=XXXXXX"
-    echo "Use --help for more information."
-    exit 1
-fi
-
-# Initial banner
-echo -e "${BLUE}============================================${NC}"
-echo -e "${BLUE}      yt-dlp-portable independent-arg       ${NC}"
-echo -e "${BLUE}               ${VERSION}                   ${NC}"
-echo -e "${BLUE}============================================${NC}"
-
-echo -e "${GREEN}[INFO] Identity managed by yt-dlp internal handler${NC}"
-
-# Check available disk space
-check_disk_space
-
-# Default options (quick mode)
+# Default options and quick mode
 declare -A OPTIONS
 OPTIONS[format]="bestvideo*+bestaudio/best"
 OPTIONS[embed_thumbnail]="yes"
@@ -142,7 +116,10 @@ OPTIONS[no_mtime]="yes"
 OPTIONS[concurrent_fragments]="5"
 OPTIONS[sleep_requests]="1.5"
 
-# Interactive menu functions
+# ==============================================================================
+# MENU FUNCTIONS
+# ==============================================================================
+
 show_subtitles_menu() {
     echo ""
     echo -e "${YELLOW}=== Subtitles ==="
@@ -153,7 +130,7 @@ show_subtitles_menu() {
     echo "5) Back to main menu"
     echo ""
     read -rp "Select an option [1-5]: " sub_choice
-
+    
     case $sub_choice in
         1)
             OPTIONS[subtitles]="no"
@@ -222,7 +199,7 @@ show_thumbnail_menu() {
     echo "5) Back to main menu"
     echo ""
     read -rp "Select an option [1-5]: " thumb_choice
-
+    
     case $thumb_choice in
         1)
             OPTIONS[embed_thumbnail]="yes"
@@ -271,7 +248,7 @@ show_format_menu() {
     echo "7) Back to main menu"
     echo ""
     read -rp "Select an option [1-7]: " format_choice
-
+    
     case $format_choice in
         1)
             OPTIONS[format]="bestvideo*+bestaudio/best"
@@ -343,7 +320,7 @@ show_output_menu() {
     echo "6) Back to main menu"
     echo ""
     read -rp "Select an option [1-6]: " output_choice
-
+    
     case $output_choice in
         1)
             OPTIONS[output_template]="%(title)s [%(id)s].%(ext)s"
@@ -393,7 +370,7 @@ show_advanced_menu() {
     echo "6) Back to main menu"
     echo ""
     read -rp "Select an option [1-6]: " adv_choice
-
+    
     case $adv_choice in
         1)
             if [ "${OPTIONS[verbose]}" == "yes" ]; then
@@ -471,59 +448,9 @@ show_advanced_menu() {
     esac
 }
 
-show_main_menu() {
-    while true; do
-        echo ""
-        echo -e "${GREEN}=== Configuration Menu ==="
-        echo -e "${NC}1) Configure subtitles"
-        echo "2) Configure thumbnail"
-        echo "3) Configure format and quality"
-        echo "4) Configure filename"
-        echo "5) Advanced options"
-        echo "6) View current configuration"
-        echo "7) Start download"
-        echo "8) Cancel"
-        echo ""
-        read -rp "Select an option [1-8]: " main_choice
-
-        case $main_choice in
-            1)
-                show_subtitles_menu
-                ;;
-            2)
-                show_thumbnail_menu
-                ;;
-            3)
-                show_format_menu
-                ;;
-            4)
-                show_output_menu
-                ;;
-            5)
-                show_advanced_menu
-                ;;
-            6)
-                show_current_config
-                ;;
-            7)
-                break
-                ;;
-            8)
-                echo -e "${YELLOW}Download cancelled by user.${NC}"
-                exit 0
-                ;;
-            *)
-                echo -e "${RED}Invalid option Please select [1-8]${NC}"
-                ;;
-        esac
-    done
-}
-
 show_current_config() {
     echo ""
-    echo -e "${GREEN}╔══════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║      Current configuration summary       ║${NC}"
-    echo -e "${GREEN}╚══════════════════════════════════════════╝${NC}"
+    echo -e "${GREEN}=== Current configuration ===${NC}"
     echo ""
     echo -e "${BLUE}Format:${NC} ${OPTIONS[format]}"
     echo -e "${BLUE}Thumbnail:${NC} $([ "${OPTIONS[embed_thumbnail]}" == "yes" ] && echo "Embed$([ -n "${OPTIONS[convert_thumbnails]}" ] && echo " (convert to ${OPTIONS[convert_thumbnails]})" || echo "")" || echo "Don't embed")"
@@ -538,15 +465,62 @@ show_current_config() {
     read -rp "Press Enter to continue..."
 }
 
+show_main_menu() {
+    while true; do
+        echo ""
+        echo -e "${GREEN}=== Configuration Menu ==="
+        echo -e "${NC}1) Configure subtitles"
+        echo "2) Configure thumbnail"
+        echo "3) Configure format and quality"
+        echo "4) Configure filename"
+        echo "5) Advanced options"
+        echo "6) View current configuration"
+        echo "7) Check for updates"
+        echo "8) Start download"
+        echo "9) Cancel"
+        echo ""
+        read -rp "Select an option [1-9]: " main_choice
+        
+        case $main_choice in
+            1) show_subtitles_menu ;;
+            2) show_thumbnail_menu ;;
+            3) show_format_menu ;;
+            4) show_output_menu ;;
+            5) show_advanced_menu ;;
+            6) show_current_config ;;
+            7)
+                echo ""
+                echo -e "${YELLOW}[UPDATE] Checking components via setup.sh...${NC}"
+                if bash "$BASEDIR/setup.sh"; then
+                    echo ""
+                    echo -e "${GREEN}[INFO] Update check complete. Press Enter to continue...${NC}"
+                    read -r
+                else
+                    echo ""
+                    echo -e "${RED}[ERROR] Update failed. Check connection.${NC}"
+                    read -r
+                fi
+                ;;
+            8) break ;;
+            9) echo -e "${YELLOW}Download cancelled by user.${NC}"; exit 0 ;;
+            *) echo -e "${RED}Invalid option. Please select [1-9]${NC}" ;;
+        esac
+    done
+}
+
+# ==============================================================================
+# EXECUTION FUNCTIONS
+# ==============================================================================
+
 # Build and execute yt-dlp command
 execute_ytdlp() {
     local cmd=("$BINDIR/yt-dlp")
-
+    
     # Base options
     if [ "${OPTIONS[verbose]}" == "yes" ]; then
         cmd+=(--verbose)
     fi
-
+    
     cmd+=(--socket-timeout 30)
     cmd+=(--retries 10)
     cmd+=(--fragment-retries 10)
@@ -557,7 +531,7 @@ execute_ytdlp() {
     cmd+=(--ffmpeg-location "${BINDIR}/ffmpeg")
     cmd+=(--concurrent-fragments "${OPTIONS[concurrent_fragments]}")
     cmd+=(-f "${OPTIONS[format]}")
-
+    
     # Thumbnail options
     if [ "${OPTIONS[embed_thumbnail]}" == "yes" ]; then
         cmd+=(--embed-thumbnail)
@@ -565,7 +539,7 @@ execute_ytdlp() {
             cmd+=(--convert-thumbnails "${OPTIONS[convert_thumbnails]}")
         fi
     fi
-
+    
     if [ -n "${OPTIONS[merge_output_format]}" ]; then
         cmd+=(--merge-output-format "${OPTIONS[merge_output_format]}")
     fi
@@ -582,59 +556,128 @@ execute_ytdlp() {
             cmd+=(--write-subs --sub-langs "$sub_lang")
         fi
     fi
-
+    
     # Output options
     if [ "${OPTIONS[restrict_filenames]}" == "yes" ]; then
         cmd+=(--restrict-filenames)
     fi
-
+    
     cmd+=(--output "${OPTIONS[output_template]}")
-
+    
     if [ "${OPTIONS[no_mtime]}" == "yes" ]; then
         cmd+=(--no-mtime)
     fi
-
+    
     # Add URL arguments
     cmd+=("${URL_ARGS[@]}")
 
     "${cmd[@]}"
 }
 
-# Main execution
-if [ "$QUICK_MODE" = true ]; then
-    echo -e "${GREEN}[INFO] Quick mode enabled. Using default configuration...${NC}"
-else
-    echo -e "${GREEN}[INFO] Interactive mode. Configure your options:${NC}"
-    show_main_menu
-fi
+# ==============================================================================
+# MAIN EXECUTION FLOW
+# ==============================================================================
 
-echo ""
-echo -e "${GREEN}[INFO] Starting download...${NC}"
-echo ""
+main() {
+    # Parse arguments
+    local QUICK_MODE=false
+    URL_ARGS=()
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --quick|-q)
+                QUICK_MODE=true
+                shift
+                ;;
+            --help|-h)
+                echo "Usage: ./download.sh [OPTIONS] [URL]"
+                echo ""
+                echo "Options:"
+                echo "  -q, --quick    Use quick mode (default settings, no menu)"
+                echo "  -h, --help     Show this help message"
+                echo ""
+                echo "If no options are provided, an interactive menu will be shown."
+                exit 0
+                ;;
+            *)
+                URL_ARGS+=("$1")
+                shift
+                ;;
+        esac
+    done
 
-# Execute yt-dlp with detailed error handling
-if ! execute_ytdlp; then
-    exit_code=$?
+    # Check if URL was provided
+    if [ ${#URL_ARGS[@]} -eq 0 ]; then
+        echo -e "${RED}Error: No URL provided.${NC}"
+        echo "Usage: ./download.sh [OPTIONS] [URL]"
+        echo "Example: ./download.sh https://www.youtube.com/watch?v=XXXXXX"
+        echo "Use --help for more information."
+        exit 1
+    fi
+
+    # Security check
+    check_root
+
+    # Verify all required binaries
+    check_binary "yt-dlp"
+    check_binary "deno"
+    check_binary "ffmpeg"
+    check_binary "ffprobe"
+
+    # Initial banner
+    echo -e "${BLUE}============================================${NC}"
+    echo -e "${BLUE}      yt-dlp-portable independent-arg       ${NC}"
+    echo -e "${BLUE}               ${VERSION}                   ${NC}"
+    echo -e "${BLUE}============================================${NC}"
+
+    echo -e "${GREEN}[INFO] Identity managed by yt-dlp internal handler${NC}"
+
+    # Check available disk space
+    check_disk_space
+
+    # Run mode
+    if [ "$QUICK_MODE" = true ]; then
+        echo -e "${GREEN}[INFO] Quick mode enabled. Using default configuration...${NC}"
+    else
+        echo -e "${GREEN}[INFO] Interactive mode. Configure your options:${NC}"
+        show_main_menu
+    fi
+
+    # Execute download
     echo ""
-    echo -e "${RED}[FAILURE] yt-dlp finished with error code: $exit_code${NC}"
-    case $exit_code in
-        1)
-            echo -e "${YELLOW}Possible causes: Invalid URL, network error, or unsupported format.${NC}"
-            ;;
-        2)
-            echo -e "${YELLOW}Possible causes: Missing dependencies or configuration issue.${NC}"
-            ;;
-        130)
-            echo -e "${YELLOW}Download was interrupted by user (Ctrl+C).${NC}"
-            ;;
-        *)
-            echo -e "${YELLOW}Check the error messages above for details.${NC}"
-            ;;
-    esac
+    echo -e "${GREEN}[INFO] Starting download...${NC}"
     echo ""
-    echo -e "${BLUE}Need help? Check the documentation or try:${NC}"
-    echo "  ./download.sh --help"
-    exit $exit_code
-fi
 
-echo -e "${GREEN}[SUCCESS] Process finished successfully.${NC}"
+    # Execute yt-dlp with detailed error handling
+    if ! execute_ytdlp; then
+        exit_code=$?
+        echo ""
+        echo -e "${RED}[FAILURE] yt-dlp finished with error code: $exit_code${NC}"
+        case $exit_code in
+            1)
+                echo -e "${YELLOW}Possible causes: Invalid URL, network error, or unsupported format.${NC}"
+                ;;
+            2)
+                echo -e "${YELLOW}Possible causes: Missing dependencies or configuration issue.${NC}"
+                ;;
+            130)
+                echo -e "${YELLOW}Download was interrupted by user (Ctrl+C).${NC}"
+                ;;
+            *)
+                echo -e "${YELLOW}Check the error messages above for details.${NC}"
+                ;;
+        esac
+        echo ""
+        echo -e "${BLUE}Need help? Check the documentation or try:${NC}"
+        echo "  ./download.sh --help"
+        exit $exit_code
+    fi
+
+    echo -e "${GREEN}[SUCCESS] Process finished successfully.${NC}"
+}
+
+# ==============================================================================
+# ENTRY POINT
+# ==============================================================================
+
+main "$@"
