@@ -2,7 +2,7 @@
 
 # ==============================================================================
 # Script Name: yt-dlp-portable (download.sh)
-# Version:     v0.6.2
+# Version:     v0.6.3(testing)
 # Author:      independent-arg
 # License:     MIT
 # ==============================================================================
@@ -13,7 +13,7 @@ set -euo pipefail
 # CONSTANTS & METADATA
 # ==============================================================================
 
-readonly VERSION="v0.6.2"
+readonly VERSION="v0.6.3(testing)"
 readonly LAST_UPDATED="2025-01-02"
 
 # ==============================================================================
@@ -102,12 +102,19 @@ check_disk_space() {
 # Default options and quick mode
 declare -A OPTIONS
 OPTIONS[format]="bestvideo*+bestaudio/best"
+OPTIONS[extract_audio]="no"
+OPTIONS[audio_format]=""
+OPTIONS[audio_quality]="5"
 OPTIONS[embed_thumbnail]="yes"
 OPTIONS[convert_thumbnails]="jpg"
 OPTIONS[merge_output_format]="mkv"
 OPTIONS[subtitles]="no"
 OPTIONS[subtitles_lang]=""
 OPTIONS[embed_subs]="no"
+OPTIONS[embed_metadata]="no"
+OPTIONS[embed_chapters]="no"
+OPTIONS[embed_info_json]="no"
+OPTIONS[remux_video]=""
 OPTIONS[write_subs]="no"
 OPTIONS[output_template]="%(title)s [%(id)s].%(ext)s"
 OPTIONS[verbose]="yes"
@@ -122,10 +129,10 @@ OPTIONS[sleep_requests]="1.5"
 
 show_subtitles_menu() {
     echo ""
-    echo -e "${YELLOW}=== Subtitles ==="
+    echo -e "${YELLOW}=== Subtitles Configuration ==="
     echo -e "${NC}1) Don't download subtitles (default)"
-    echo "2) Download subtitles (separate file)"
-    echo "3) Embed subtitles in video"
+    echo "2) Download subtitles (separate .srt file)"
+    echo "3) Embed subtitles into video file"
     echo "4) Download and embed subtitles"
     echo "5) Back to main menu"
     echo ""
@@ -191,10 +198,10 @@ show_subtitles_menu() {
 
 show_thumbnail_menu() {
     echo ""
-    echo -e "${YELLOW}=== Thumbnail ==="
-    echo -e "${NC}1) Embed and convert to JPG (recommended, default)"
-    echo "2) Embed thumbnail (original format)"
-    echo "3) Embed and convert to PNG"
+    echo -e "${YELLOW}=== Thumbnail Configuration ==="
+    echo -e "${NC}1) Embed thumbnail as JPG (recommended, forces MKV container, default)"
+    echo "2) Embed thumbnail in original format"
+    echo "3) Embed thumbnail as PNG"
     echo "4) Don't embed thumbnail"
     echo "5) Back to main menu"
     echo ""
@@ -234,20 +241,67 @@ show_thumbnail_menu() {
     esac
 }
 
+show_metadata_menu() {
+    echo ""
+    echo -e "${YELLOW}=== Metadata and Chapters ==="
+    echo -e "${NC}1) Don't embed any metadata (default)"
+    echo "2) Embed basic metadata (title, artist, date)"
+    echo "3) Embed metadata + chapter markers"
+    echo "4) Embed everything (metadata + chapters + full info.json for MKV)"
+    echo "5) Back to main menu"
+    echo ""
+    read -rp "Select an option [1-5]: " meta_choice
+    
+    case $meta_choice in
+        1)
+            OPTIONS[embed_metadata]="no"
+            OPTIONS[embed_chapters]="no"
+            OPTIONS[embed_info_json]="no"
+            echo -e "${GREEN}✓ Metadata disabled${NC}"
+            ;;
+        2)
+            OPTIONS[embed_metadata]="yes"
+            OPTIONS[embed_chapters]="no"
+            OPTIONS[embed_info_json]="no"
+            echo -e "${GREEN}✓ Will embed basic metadata (title, artist, date, description)${NC}"
+            ;;
+        3)
+            OPTIONS[embed_metadata]="yes"
+            OPTIONS[embed_chapters]="yes"
+            OPTIONS[embed_info_json]="no"
+            echo -e "${GREEN}✓ Will embed metadata with chapter markers${NC}"
+            ;;
+        4)
+            OPTIONS[embed_metadata]="yes"
+            OPTIONS[embed_chapters]="yes"
+            OPTIONS[embed_info_json]="yes"
+            echo -e "${GREEN}✓ Will embed all metadata (note: info.json only works with MKV/MKA)${NC}"
+            echo -e "${YELLOW}   Info: This option embeds the complete JSON metadata as attachment${NC}"
+            ;;
+        5)
+            return
+            ;;
+        *)
+            echo -e "${RED}Invalid option${NC}"
+            ;;
+    esac
+}
+
 show_format_menu() {
     echo ""
     echo -e "${YELLOW}=== Format and Quality ==="
     echo -e "${NC}1) Highest quality available (recommended, default)"
     echo "   Downloads and merges best video with best audio"
-    echo "2) Quick download mode (faster, good quality)"
-    echo "   Single pre-merged file, but often lower quality than option 1"
+    echo "2) Best pre-merged format (single file, faster, usually lower quality)"
+    echo "   Single pre-merged file from the server"
     echo "3) Video only (no sound)"
-    echo "4) Audio only (no video)"
-    echo "5) Choose specific resolution (4K, 1080p, 720p, etc.)"
-    echo "6) Custom format (advanced)"
-    echo "7) Back to main menu"
+    echo "4) Audio only (no video, no conversion)"
+    echo "5) Specific resolution (4K, 1080p, 720p, etc.)"
+    echo "6) Remux video to specific container (fast, no re-encoding)"
+    echo "7) Custom format (advanced)"
+    echo "8) Back to main menu"
     echo ""
-    read -rp "Select an option [1-7]: " format_choice
+    read -rp "Select an option [1-8]: " format_choice
     
     case $format_choice in
         1)
@@ -283,6 +337,25 @@ show_format_menu() {
             ;;
         6)
             echo ""
+            echo -e "${YELLOW}Remux changes the container without re-encoding (fast, no quality loss)${NC}"
+            echo "Available containers: mp4, mkv, webm, avi, flv, mov"
+            echo "Note: If the source codec is incompatible with the container, remux will fail"
+            read -rp "Target container format: " remux_format
+            # Sanitize: allow only alphanumeric
+            remux_format=$(echo "$remux_format" | tr -cd 'a-z0-9')
+            
+            if [[ -n "$remux_format" ]]; then
+                # We'll add this to execution later, but store it now
+                OPTIONS[remux_video]="$remux_format"
+                echo -e "${GREEN}✓ Will remux video to ${remux_format} container${NC}"
+                echo -e "${YELLOW}   Info: Still downloading best quality, will remux after${NC}"
+            else
+                echo -e "${RED}Invalid format. No remux will be applied.${NC}"
+                OPTIONS[remux_video]=""
+            fi
+            ;;
+        7)
+            echo ""
             echo -e "${YELLOW}Custom format (see yt-dlp documentation)${NC}"
             echo -e "${YELLOW}Warning: Invalid formats may cause download failures.${NC}"
             read -rp "Format: " custom_format
@@ -300,7 +373,141 @@ show_format_menu() {
                 fi
             fi
             ;;
+        8)
+            return
+            ;;
+        *)
+            echo -e "${RED}Invalid option${NC}"
+            ;;
+    esac
+}
+
+show_audio_menu() {
+    echo ""
+    echo -e "${YELLOW}=== Audio Extraction and Conversion ==="
+    echo -e "${NC}This menu is for extracting/converting audio from videos."
+    echo "If you just want to download audio streams without conversion,"
+    echo "use the Format menu instead and select 'Audio stream only'."
+    echo ""
+    echo "1) Don't extract/convert audio (default)"
+    echo "2) Extract audio as MP3 (most compatible)"
+    echo "3) Extract audio as AAC (good quality, smaller files)"
+    echo "4) Extract audio as OPUS (best quality/size ratio)"
+    echo "5) Extract audio as FLAC (lossless, larger files)"
+    echo "6) Extract audio as M4A (Apple ecosystem)"
+    echo "7) Extract audio as VORBIS (OGG container)"
+    echo "8) Extract audio as WAV (uncompressed, very large)"
+    echo "9) Custom audio format and quality (advanced)"
+    echo "10) Back to main menu"
+    echo ""
+    read -rp "Select an option [1-10]: " audio_choice
+    
+    case $audio_choice in
+        1)
+            OPTIONS[extract_audio]="no"
+            OPTIONS[audio_format]=""
+            echo -e "${GREEN}✓ Audio extraction disabled${NC}"
+            ;;
+        2)
+            OPTIONS[extract_audio]="yes"
+            OPTIONS[audio_format]="mp3"
+            echo ""
+            read -rp "Audio quality [0-9, where 0=best, 5=default, 9=worst] or bitrate (e.g., 192K): " quality
+            # Sanitize: allow digits, 'K', 'M', and decimal point
+            quality=$(echo "${quality:-5}" | tr -cd '0-9KMkm.')
+            if [[ -z "$quality" ]]; then
+                quality="5"
+            fi
+            OPTIONS[audio_quality]="$quality"
+            echo -e "${GREEN}✓ Will extract audio as MP3 with quality: ${quality}${NC}"
+            ;;
+        3)
+            OPTIONS[extract_audio]="yes"
+            OPTIONS[audio_format]="aac"
+            echo ""
+            read -rp "Audio quality [0-9, where 0=best, 5=default, 9=worst] or bitrate (e.g., 192K): " quality
+            quality=$(echo "${quality:-5}" | tr -cd '0-9KMkm.')
+            if [[ -z "$quality" ]]; then
+                quality="5"
+            fi
+            OPTIONS[audio_quality]="$quality"
+            echo -e "${GREEN}✓ Will extract audio as AAC with quality: ${quality}${NC}"
+            ;;
+        4)
+            OPTIONS[extract_audio]="yes"
+            OPTIONS[audio_format]="opus"
+            echo ""
+            read -rp "Audio quality [0-9, where 0=best, 5=default, 9=worst] or bitrate (e.g., 128K): " quality
+            quality=$(echo "${quality:-5}" | tr -cd '0-9KMkm.')
+            if [[ -z "$quality" ]]; then
+                quality="5"
+            fi
+            OPTIONS[audio_quality]="$quality"
+            echo -e "${GREEN}✓ Will extract audio as OPUS with quality: ${quality}${NC}"
+            echo -e "${YELLOW}   Info: OPUS offers excellent quality at lower bitrates${NC}"
+            ;;
+        5)
+            OPTIONS[extract_audio]="yes"
+            OPTIONS[audio_format]="flac"
+            OPTIONS[audio_quality]="0"
+            echo -e "${GREEN}✓ Will extract audio as FLAC (lossless)${NC}"
+            echo -e "${YELLOW}   Info: FLAC files are large but preserve perfect quality${NC}"
+            ;;
+        6)
+            OPTIONS[extract_audio]="yes"
+            OPTIONS[audio_format]="m4a"
+            echo ""
+            read -rp "Audio quality [0-9, where 0=best, 5=default, 9=worst] or bitrate (e.g., 192K): " quality
+            quality=$(echo "${quality:-5}" | tr -cd '0-9KMkm.')
+            if [[ -z "$quality" ]]; then
+                quality="5"
+            fi
+            OPTIONS[audio_quality]="$quality"
+            echo -e "${GREEN}✓ Will extract audio as M4A with quality: ${quality}${NC}"
+            ;;
         7)
+            OPTIONS[extract_audio]="yes"
+            OPTIONS[audio_format]="vorbis"
+            echo ""
+            read -rp "Audio quality [0-9, where 0=best, 5=default, 9=worst]: " quality
+            quality=$(echo "${quality:-5}" | tr -cd '0-9')
+            if [[ -z "$quality" ]]; then
+                quality="5"
+            fi
+            OPTIONS[audio_quality]="$quality"
+            echo -e "${GREEN}✓ Will extract audio as VORBIS with quality: ${quality}${NC}"
+            ;;
+        8)
+            OPTIONS[extract_audio]="yes"
+            OPTIONS[audio_format]="wav"
+            OPTIONS[audio_quality]="0"
+            echo -e "${GREEN}✓ Will extract audio as WAV (uncompressed)${NC}"
+            echo -e "${YELLOW}   Warning: WAV files are very large${NC}"
+            ;;
+        9)
+            echo ""
+            echo -e "${YELLOW}Available formats: best, aac, alac, flac, m4a, mp3, opus, vorbis, wav${NC}"
+            read -rp "Audio format: " custom_format
+            # Sanitize: allow only alphanumeric
+            custom_format=$(echo "$custom_format" | tr -cd 'a-zA-Z')
+            
+            if [[ -n "$custom_format" ]]; then
+                OPTIONS[extract_audio]="yes"
+                OPTIONS[audio_format]="$custom_format"
+                echo ""
+                read -rp "Audio quality [0-9 or bitrate like 192K]: " quality
+                quality=$(echo "${quality:-5}" | tr -cd '0-9KMkm.')
+                if [[ -z "$quality" ]]; then
+                    quality="5"
+                fi
+                OPTIONS[audio_quality]="$quality"
+                echo -e "${GREEN}✓ Will extract audio as ${custom_format} with quality: ${quality}${NC}"
+            else
+                echo -e "${RED}Invalid format. Audio extraction disabled.${NC}"
+                OPTIONS[extract_audio]="no"
+            fi
+            ;;
+        10)
             return
             ;;
         *)
@@ -311,12 +518,12 @@ show_format_menu() {
 
 show_output_menu() {
     echo ""
-    echo -e "${YELLOW}=== Filename Template ==="
-    echo -e "${NC}1) Title [ID].ext (default)"
-    echo "2) Title.ext"
-    echo "3) ID.ext"
-    echo "4) Title - Channel [ID].ext"
-    echo "5) Custom"
+    echo -e "${YELLOW}=== Output Filename Template ==="
+    echo -e "${NC}1) Title [VideoID].ext (default)"
+    echo "2) Title only.ext"
+    echo "3) VideoID only.ext"
+    echo "4) Title - ChannelName [VideoID].ext"
+    echo "5) Custom template"
     echo "6) Back to main menu"
     echo ""
     read -rp "Select an option [1-6]: " output_choice
@@ -363,8 +570,8 @@ show_advanced_menu() {
     echo ""
     echo -e "${YELLOW}=== Advanced Options ==="
     echo -e "${NC}1) Verbose mode: $([ "${OPTIONS[verbose]}" == "yes" ] && echo -e "${GREEN}Yes${NC}" || echo -e "${RED}No${NC}")"
-    echo "2) Restrict filenames: $([ "${OPTIONS[restrict_filenames]}" == "yes" ] && echo -e "${GREEN}Yes${NC}" || echo -e "${RED}No${NC}")"
-    echo "3) Don't modify file date: $([ "${OPTIONS[no_mtime]}" == "yes" ] && echo -e "${GREEN}Yes${NC}" || echo -e "${RED}No${NC}")"
+    echo "2) Restrict filenames (ASCII only, remove special chars): $([ "${OPTIONS[restrict_filenames]}" == "yes" ] && echo -e "${GREEN}Yes${NC}" || echo -e "${RED}No${NC}")"
+    echo "3) Preserve original upload date: $([ "${OPTIONS[no_mtime]}" == "yes" ] && echo -e "${GREEN}Yes${NC}" || echo -e "${RED}No${NC}")"
     echo "4) Concurrent fragments: ${OPTIONS[concurrent_fragments]}"
     echo "5) Sleep between requests: ${OPTIONS[sleep_requests]}s"
     echo "6) Back to main menu"
@@ -450,17 +657,20 @@ show_advanced_menu() {
 
 show_current_config() {
     echo ""
-    echo -e "${GREEN}=== Current configuration ===${NC}"
+    echo -e "${GREEN}=== Current Configuration ===${NC}"
     echo ""
     echo -e "${BLUE}Format:${NC} ${OPTIONS[format]}"
     echo -e "${BLUE}Thumbnail:${NC} $([ "${OPTIONS[embed_thumbnail]}" == "yes" ] && echo "Embed$([ -n "${OPTIONS[convert_thumbnails]}" ] && echo " (convert to ${OPTIONS[convert_thumbnails]})" || echo "")" || echo "Don't embed")"
+    echo -e "${BLUE}Metadata:${NC} $([ "${OPTIONS[embed_metadata]}" == "yes" ] && echo "Embed metadata" || echo "No metadata")$([ "${OPTIONS[embed_chapters]}" == "yes" ] && echo " + chapters" || echo "")$([ "${OPTIONS[embed_info_json]}" == "yes" ] && echo " + info.json" || echo "")"
     echo -e "${BLUE}Subtitles:${NC} $([ "${OPTIONS[subtitles]}" == "yes" ] && echo "Yes$([ "${OPTIONS[write_subs]}" == "yes" ] && echo " (download)" || echo "")$([ "${OPTIONS[embed_subs]}" == "yes" ] && echo " (embed)" || echo "")$([ -n "${OPTIONS[subtitles_lang]}" ] && echo " - Language: ${OPTIONS[subtitles_lang]}" || echo "")" || echo "No")"
+    echo -e "${BLUE}Audio extraction:${NC} $([ "${OPTIONS[extract_audio]}" == "yes" ] && echo "Yes - Format: ${OPTIONS[audio_format]}, Quality: ${OPTIONS[audio_quality]}" || echo "No")"
+    echo -e "${BLUE}Video remux:${NC} $([ -n "${OPTIONS[remux_video]}" ] && echo "Yes - Container: ${OPTIONS[remux_video]}" || echo "No")"
     echo -e "${BLUE}Output template:${NC} ${OPTIONS[output_template]}"
     echo -e "${BLUE}Verbose mode:${NC} ${OPTIONS[verbose]}"
     echo -e "${BLUE}Restrict filenames:${NC} ${OPTIONS[restrict_filenames]}"
-    echo -e "${BLUE}Don't modify date:${NC} ${OPTIONS[no_mtime]}"
+    echo -e "${BLUE}Preserve upload date:${NC} ${OPTIONS[no_mtime]}"
     echo -e "${BLUE}Concurrent fragments:${NC} ${OPTIONS[concurrent_fragments]}"
-    echo -e "${BLUE}Sleep time:${NC} ${OPTIONS[sleep_requests]}s"
+    echo -e "${BLUE}Delay between requests:${NC} ${OPTIONS[sleep_requests]}s"
     echo ""
     read -rp "Press Enter to continue..."
 }
@@ -468,27 +678,31 @@ show_current_config() {
 show_main_menu() {
     while true; do
         echo ""
-        echo -e "${GREEN}=== Configuration Menu ==="
+        echo -e "${GREEN}=== Main Menu ==="
         echo -e "${NC}1) Configure subtitles"
         echo "2) Configure thumbnail"
-        echo "3) Configure format and quality"
-        echo "4) Configure filename"
-        echo "5) Advanced options"
-        echo "6) View current configuration"
-        echo "7) Check for updates"
-        echo "8) Start download"
-        echo "9) Cancel"
+        echo "3) Configure metadata and chapters"
+        echo "4) Configure format and quality"
+        echo "5) Configure audio extraction and conversion"
+        echo "6) Configure output filename"
+        echo "7) Advanced options"
+        echo "8) View current configuration"
+        echo "9) Check for updates"
+        echo "10) Start download"
+        echo "11) Cancel"
         echo ""
         read -rp "Select an option [1-9]: " main_choice
         
         case $main_choice in
             1) show_subtitles_menu ;;
             2) show_thumbnail_menu ;;
-            3) show_format_menu ;;
-            4) show_output_menu ;;
-            5) show_advanced_menu ;;
-            6) show_current_config ;;
-            7)
+            3) show_metadata_menu ;;
+            4) show_format_menu ;;
+            5) show_audio_menu ;;
+            6) show_output_menu ;;
+            7) show_advanced_menu ;;
+            8) show_current_config ;;
+            9)
                 echo ""
                 echo -e "${YELLOW}[UPDATE] Checking components via setup.sh...${NC}"
                 if bash "$BASEDIR/setup.sh"; then
@@ -501,8 +715,8 @@ show_main_menu() {
                     read -r
                 fi
                 ;;
-            8) break ;;
-            9) echo -e "${YELLOW}Download cancelled by user.${NC}"; exit 0 ;;
+            10) break ;;
+            11) echo -e "${YELLOW}Download cancelled by user.${NC}"; exit 0 ;;
             *) echo -e "${RED}Invalid option. Please select [1-9]${NC}" ;;
         esac
     done
@@ -544,6 +758,19 @@ execute_ytdlp() {
         cmd+=(--merge-output-format "${OPTIONS[merge_output_format]}")
     fi
 
+    # Metadata options
+    if [ "${OPTIONS[embed_metadata]}" == "yes" ]; then
+        cmd+=(--embed-metadata)
+    fi
+    
+    if [ "${OPTIONS[embed_chapters]}" == "yes" ]; then
+        cmd+=(--embed-chapters)
+    fi
+    
+    if [ "${OPTIONS[embed_info_json]}" == "yes" ]; then
+        cmd+=(--embed-info-json)
+    fi
+
     # Subtitle options
     if [ "${OPTIONS[subtitles]}" == "yes" ]; then
         local sub_lang="${OPTIONS[subtitles_lang]}"
@@ -555,6 +782,22 @@ execute_ytdlp() {
         elif [ "${OPTIONS[write_subs]}" == "yes" ]; then
             cmd+=(--write-subs --sub-langs "$sub_lang")
         fi
+    fi
+
+    # Audio extraction options
+    if [ "${OPTIONS[extract_audio]}" == "yes" ]; then
+        cmd+=(--extract-audio)
+        if [ -n "${OPTIONS[audio_format]}" ]; then
+            cmd+=(--audio-format "${OPTIONS[audio_format]}")
+        fi
+        if [ -n "${OPTIONS[audio_quality]}" ]; then
+            cmd+=(--audio-quality "${OPTIONS[audio_quality]}")
+        fi
+    fi
+    
+    # Video remux options
+    if [ -n "${OPTIONS[remux_video]}" ]; then
+        cmd+=(--remux-video "${OPTIONS[remux_video]}")
     fi
     
     # Output options
