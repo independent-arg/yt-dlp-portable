@@ -1,0 +1,59 @@
+name: Release
+
+# Automatically publishes a GitHub Release whenever a "vX.Y.Z" tag is pushed.
+# Can also be re-run manually from the Actions tab for an existing tag.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release (e.g. v0.10.0)"
+        required: true
+
+permissions:
+  contents: write
+
+# Avoid two runs racing to publish the same tag (e.g. tag push + manual re-run)
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve tag
+        id: vars
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Verify script VERSION matches the tag
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          SCRIPT_VERSION=$(grep -oP 'readonly VERSION="\K[^"]+' download.sh)
+          if [[ "$TAG" != "$SCRIPT_VERSION" ]]; then
+            echo "::error::Tag ($TAG) does not match VERSION in download.sh ($SCRIPT_VERSION)"
+            exit 1
+          fi
+
+      - name: Make scripts executable
+        run: chmod +x download.sh setup.sh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: ${{ steps.vars.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            download.sh
+            setup.sh
+            LICENSE
+            README.md
