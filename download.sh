@@ -2,7 +2,7 @@
 
 # ==============================================================================
 # Script Name: yt-dlp-portable (download.sh)
-# Version:     v0.9.0
+# Version:     v0.10.0
 # Author:      independent-arg
 # License:     MIT
 # ==============================================================================
@@ -13,8 +13,8 @@ set -euo pipefail
 # CONSTANTS & CONFIGURATION
 # ==============================================================================
 
-readonly VERSION="v0.9.0"
-readonly LAST_UPDATED="2026-06-23"
+readonly VERSION="v0.10.0"
+readonly LAST_UPDATED="2026-09-01"
 
 readonly CONFIG_FILE=".yt-dlp-portable.config"
 readonly BINDIR="bin"
@@ -73,11 +73,20 @@ save_config() {
 # ==============================================================================
 
 get_bin_dir() {
+    local script_path
     if command -v readlink >/dev/null 2>&1 && readlink -f "$0" >/dev/null 2>&1; then
-        printf "%s/%s" "$(dirname "$(readlink -f "$0")")" "$BINDIR"
+        script_path=$(readlink -f "$0")
     else
-        printf "%s/%s" "$(cd "$(dirname "$0")" && pwd -P)" "$BINDIR"
+        script_path="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
     fi
+
+    # readlink -f can resolve a broken symlink without error, so verify the target actually exists
+    if [[ ! -f "$script_path" ]]; then
+        printf "%b[ERROR] Could not resolve script location (broken symlink?): %s%b\n" "${RED}" "$script_path" "${NC}" >&2
+        exit 1
+    fi
+
+    printf "%s/%s" "$(dirname "$script_path")" "$BINDIR"
 }
 
 refresh_screen() {
@@ -121,6 +130,8 @@ init_defaults() {
     OPTIONS[max_downloads]=""
     OPTIONS[ignore_errors]="no"
     OPTIONS[max_res_sort]=""
+    OPTIONS[live_from_start]="no"
+    OPTIONS[wait_for_video]=""
 }
 
 # ==============================================================================
@@ -368,7 +379,10 @@ configure_format_and_audio() {
                        fi ;;
                     6) read -rp "Format (see yt-dlp docs): " cfmt
                        if [[ -n "$cfmt" ]]; then
-                           OPTIONS[format]=$(tr -cd 'a-zA-Z0-9+\-/\[\]\(\)=<>:' <<< "$cfmt")
+                           # Only strip control chars (e.g. escape sequences); the value is passed as a
+                           # literal argv to yt-dlp (never through a shell), so selector syntax like
+                           # commas, spaces, '*', '.', '!' etc. must be preserved
+                           OPTIONS[format]=$(tr -d '[:cntrl:]' <<< "$cfmt")
                            OPTIONS[remux_video]=""; OPTIONS[max_res_sort]=""
                        fi ;;
                     *) printf "\n%bInvalid sub-option.%b\n" "${RED}" "${NC}"; sleep 1; continue ;;
@@ -388,10 +402,16 @@ configure_format_and_audio() {
                 read -rp "Select sub-option [1-7]: " choice
                 if [[ "$choice" == "1" ]]; then
                     OPTIONS[extract_audio]="no"; OPTIONS[audio_format]=""; OPTIONS[audio_quality]=""
+                    # Restore a video+audio format if it was auto-switched to audio-only
+                    if [[ "${OPTIONS[format]}" == "bestaudio/best" || "${OPTIONS[format]}" == "bestaudio" ]]; then
+                        OPTIONS[format]="bestvideo*+bestaudio/best"
+                    fi
                     printf "\n%bAudio extraction disabled.%b\n" "${GREEN}" "${NC}"
                 else
                     case "$choice" in 2) fmt="mp3";; 3) fmt="aac";; 4) fmt="opus";; 5) fmt="flac";; 6) fmt="m4a";; 7) fmt="wav";; *) printf "\n%bInvalid sub-option.%b\n" "${RED}" "${NC}"; sleep 1; continue ;; esac
                     OPTIONS[extract_audio]="yes"; OPTIONS[audio_format]="$fmt"
+                    # Avoid downloading and discarding a full video stream just to extract audio
+                    OPTIONS[format]="bestaudio/best"; OPTIONS[remux_video]=""; OPTIONS[max_res_sort]=""
                     if [[ "$fmt" != "flac" && "$fmt" != "wav" ]]; then
                         read -rp "Quality [0=best, 5=default, 9=worst]: " qual
                         OPTIONS[audio_quality]=$(tr -cd '0-9' <<< "${qual:-5}")
@@ -494,6 +514,43 @@ configure_advanced_settings() {
             6)  read -rp "Seconds: " s
                 [[ "$s" =~ ^[0-9.]+$ ]] && OPTIONS[sleep_requests]="$s" ;;
             7) return ;;
+            *) printf "%bInvalid option.%b\n" "${RED}" "${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+configure_live_stream() {
+    local choice="" wait_val=""
+
+    while true; do
+        refresh_screen
+        printf "%b=== Live Stream Recording ===%b\n\n" "${YELLOW}" "${NC}"
+        printf "Record ongoing or upcoming live streams so you keep a copy even if the\n"
+        printf "broadcaster deletes it afterwards.\n\n"
+        printf "1) Record from the start: [%s]\n" "$([[ "${OPTIONS[live_from_start]}" == "yes" ]] && echo "Enabled" || echo "Disabled (joins from current point)")"
+        printf "2) Wait for scheduled stream: [%s]\n" "${OPTIONS[wait_for_video]:-Disabled}"
+        printf "3) Back\n\n"
+
+        read -rp "Select an option [1-3]: " choice
+        printf "\n"
+
+        case "$choice" in
+            1)
+                OPTIONS[live_from_start]=$([[ "${OPTIONS[live_from_start]}" == "yes" ]] && echo "no" || echo "yes")
+                printf "%bLive-from-start setting updated.%b\n" "${GREEN}" "${NC}"; sleep 1 ;;
+            2)
+                read -rp "Seconds between retries, e.g. 60 or 60-3600 [Enter to disable]: " wait_val
+                if [[ -z "$wait_val" ]]; then
+                    OPTIONS[wait_for_video]=""
+                    printf "%bWait-for-video disabled.%b\n" "${GREEN}" "${NC}"
+                elif [[ "$wait_val" =~ ^[0-9]+(-[0-9]+)?$ ]]; then
+                    OPTIONS[wait_for_video]="$wait_val"
+                    printf "%bWait-for-video set to: %s%b\n" "${GREEN}" "$wait_val" "${NC}"
+                else
+                    printf "%b[ERROR] Invalid value. Use SECONDS or MIN-MAX (e.g., 60-3600).%b\n" "${RED}" "${NC}"
+                fi
+                sleep 1 ;;
+            3) return ;;
             *) printf "%bInvalid option.%b\n" "${RED}" "${NC}"; sleep 1 ;;
         esac
     done
@@ -613,6 +670,14 @@ view_config() {
         printf "Auto (Single video or Playlist)\n"
     fi
 
+    # 4b. Live Streams
+    if [[ "${OPTIONS[live_from_start]}" == "yes" || -n "${OPTIONS[wait_for_video]:-}" ]]; then
+        printf "%b• Live:%b    " "${GREEN}" "${NC}"
+        [[ "${OPTIONS[live_from_start]}" == "yes" ]] && printf "Recording from start "
+        [[ -n "${OPTIONS[wait_for_video]:-}" ]] && printf "(Waiting for scheduled stream: %ss)" "${OPTIONS[wait_for_video]}"
+        printf "\n"
+    fi
+
     # 5. Output
     printf "%b• Target:%b  " "${GREEN}" "${NC}"
     printf "%b%s%b\n" "${BLUE}" "${OUTPUT_DIR:-Current Directory}" "${NC}"
@@ -693,14 +758,15 @@ main_menu_loop() {
         printf "4) Configure Format & Audio Extraction\n"
         printf "5) Configure Automation & Output Templates (Playlists, Archives)\n"
         printf "6) Configure Advanced Settings (Fragments, Sleep, Verbose)\n"
-        printf "7) View Current Configuration Summary\n"
-        printf "8) Check For Updates\n"
-        printf "9) Exit\n"
+        printf "7) Configure Live Stream Recording (Save streams before they're deleted)\n"
+        printf "8) View Current Configuration Summary\n"
+        printf "9) Check For Updates\n"
+        printf "10) Exit\n"
         printf "\n"
-        printf "%b10) START DOWNLOAD%b\n" "${GREEN}" "${NC}"
+        printf "%b11) START DOWNLOAD%b\n" "${GREEN}" "${NC}"
 
         printf "\n"
-        read -rp "Select an option [1-10]: " choice
+        read -rp "Select an option [1-11]: " choice
         printf "\n"
 
         case "$choice" in
@@ -710,10 +776,11 @@ main_menu_loop() {
             4)  configure_format_and_audio ;;
             5)  configure_automation_naming ;;
             6)  configure_advanced_settings ;;
-            7)  view_config ;;
-            8)  check_updates ;;
-            9)  printf "%bBye!%b\n" "${YELLOW}" "${NC}"; exit 0 ;;
-            10)
+            7)  configure_live_stream ;;
+            8)  view_config ;;
+            9)  check_updates ;;
+            10) printf "%bBye!%b\n" "${YELLOW}" "${NC}"; exit 0 ;;
+            11)
                 if [ ${#URL_LIST[@]} -eq 0 ]; then
                     printf "%b[ERROR] No URLs in list. Please add at least one.%b\n" "${RED}" "${NC}"
                     sleep 2
@@ -783,6 +850,10 @@ execute_ytdlp() {
     if [[ "${OPTIONS[ignore_errors]}" == "yes" ]]; then
         cmd+=(-i)
     fi
+
+    # Live streams (record from the start so the content survives even if deleted later)
+    [[ "${OPTIONS[live_from_start]}" == "yes" ]] && cmd+=(--live-from-start)
+    [[ -n "${OPTIONS[wait_for_video]:-}" ]] && cmd+=(--wait-for-video "${OPTIONS[wait_for_video]}")
 
     # Archive
     if [[ "${OPTIONS[use_archive]}" == "yes" ]]; then
@@ -865,6 +936,7 @@ main() {
 
     # 2. Parse Args
     local QUICK_MODE=false
+    local LIVE_MODE=false
     local code=0
 
     while [[ $# -gt 0 ]]; do
@@ -873,9 +945,17 @@ main() {
                 QUICK_MODE=true
                 shift
                 ;;
+            --live)
+                LIVE_MODE=true
+                shift
+                ;;
             --help|-h)
                 printf "Usage: ./download.sh [OPTIONS] [URL...]\n\n"
-                printf "  -q, --quick    Quick mode (default config without interactive menus)\n"
+                printf "  -q, --quick    Quick mode: use defaults and skip all menus\n"
+                printf "  --live         Modifier: record from the actual start of a live stream\n"
+                printf "                 (--live-from-start), instead of joining midway. Combine\n"
+                printf "                 with --quick for a fully automated one-liner, e.g.:\n"
+                printf "                   ./download.sh --quick --live URL\n"
                 printf "  -h, --help     Show this help message\n"
                 exit 0
                 ;;
@@ -885,6 +965,8 @@ main() {
                 ;;
         esac
     done
+
+    [[ "$LIVE_MODE" == "true" ]] && OPTIONS[live_from_start]="yes"
 
     # 3. Validation
     check_system

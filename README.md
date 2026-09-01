@@ -10,6 +10,7 @@ Designed to make video downloading simple, secure, and fully configurable withou
 - **Flexible URL Input**: Provide URLs via command line or enter them interactively within the menu
 - **Smart Review**: Presents a clear summary of your settings (Content, Visuals, Data) before you hit download.
 - **Quick Mode**: One-command instant download using optimized "Best Quality" defaults `--quick`.
+- **Live Stream Archiving**: Record live streams from the very start with `--live-from-start`, so you keep your own copy even if the broadcaster deletes it afterwards.
 - **Modern Support**: Includes `Deno` runtime to handle complex JavaScript challenges from sites like YouTube.
 - **Hardened Security**: Strict SHA256 binary verification, root-execution prevention, and safe temporary file handling.
 
@@ -57,24 +58,28 @@ You can also pass URLs as arguments to skip the URL manager:
 ```bash
 ./download.sh "https://youtu.be/example"
 ```
+To record a live stream from the start, use menu option **7) Configure Live Stream Recording** (also lets you set a wait timer for streams that haven't started yet).
 
 ### Quick Mode (Fastest)
-Skip the menus and download immediately with **Best Video + Best Audio** settings.
+Skip the menus entirely and download immediately with **Best Video + Best Audio** settings — ideal for scripts, cron jobs, or any non-interactive use.
 ```bash
 ./download.sh --quick "https://youtu.be/example"
 # or
 ./download.sh -q "https://youtu.be/example"
-```
 
-*This mode uses optimized defaults: Best quality, MKV container, and embedded JPG thumbnails.*
-
-### Batch Downloads
-
-Download multiple videos or playlists in one go.
-
-```bash
+# Works with multiple URLs too (batch download)
 ./download.sh --quick "URL1" "URL2" "URL3"
 ```
+
+*This mode uses the same defaults as Interactive Mode (Best quality, MKV container, embedded JPG thumbnails) — the only difference is that it skips the menu loop entirely. Batch downloading multiple URLs also works in Interactive Mode via "Manage URLs".*
+
+#### `--live`: recording flag (works with either mode)
+Add `--live` to record from the actual start of a broadcast instead of joining midway — useful for archiving a stream before the broadcaster deletes it. It is a modifier, not a mode of its own:
+```bash
+# Automated one-liner (no menus at all)
+./download.sh --quick --live "https://youtube.com/watch?v=LIVE_ID"
+```
+`--live` maps to yt-dlp's `--live-from-start`. Without `--quick` it just pre-selects the option before showing the interactive menu; the menu is where you'd also set `--wait-for-video` for streams that haven't started yet.
 
 ### Help
 
@@ -109,8 +114,11 @@ The interactive menu allows you to configure:
 11. **Advanced Options**:
    - Verbose mode, ASCII filenames, and original date preservation.
    - Concurrent fragments and request sleep timers.
-12. **View Current Configuration**: Review all settings before execution.
-13. **Check for Updates**: Re-run the setup process to update binaries.
+12. **Live Stream Recording**:
+   - Record ongoing live streams from the start (`--live-from-start`) so you have a local copy even if the broadcaster deletes it later.
+   - Wait for scheduled/upcoming streams to go live (`--wait-for-video`).
+13. **View Current Configuration**: Review all settings before execution.
+14. **Check for Updates**: Re-run the setup process to update binaries.
 
 ## Project Structure
 

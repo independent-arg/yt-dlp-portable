@@ -2,7 +2,7 @@
 
 # ==============================================================================
 # Script Name: yt-dlp-portable (setup.sh)
-# Version:     v0.9.0
+# Version:     v0.10.0
 # Author:      independent-arg
 # License:     MIT
 # ==============================================================================
@@ -10,16 +10,24 @@
 set -euo pipefail
 shopt -s inherit_errexit
 
-readonly VERSION="v0.9.0"
-readonly LAST_UPDATED="2026-06-23"
+readonly VERSION="v0.10.0"
+readonly LAST_UPDATED="2026-09-01"
 
 # Paths
 if command -v readlink >/dev/null 2>&1 && readlink -f "$0" >/dev/null 2>&1; then
-    BASEDIR=$(dirname "$(readlink -f "$0")")
+    SCRIPT_PATH=$(readlink -f "$0")
 else
     # Fallback for systems without readlink -f
-    BASEDIR=$(cd "$(dirname "$0")" && pwd -P)
+    SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
 fi
+
+# readlink -f can resolve a broken symlink without error, so verify the target actually exists
+if [[ ! -f "$SCRIPT_PATH" ]]; then
+    printf 'Error: could not resolve the script location (broken symlink?): %s\n' "$SCRIPT_PATH" >&2
+    exit 1
+fi
+
+BASEDIR=$(dirname "$SCRIPT_PATH")
 BINDIR="${BASEDIR}/bin"
 
 # Colors
