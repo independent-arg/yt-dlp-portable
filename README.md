@@ -1,17 +1,16 @@
 # yt-dlp-portable
 
 A robust, portable, and interactive shell wrapper for `yt-dlp`.
-Designed to make video downloading simple, secure, and fully configurable without polluting your system.
+Designed to make video downloading simple, secure, and fully configurable without polluting your PC.
 
 ## Key Features
 
-- **Zero Global Dependencies - Portable**: Automatically manages `yt-dlp`, `FFmpeg`, and `Deno` inside a local `bin/` folder.
+- **Portable**: Automatically manages `yt-dlp`, `FFmpeg`, and `Deno` inside a local `bin/` folder.
 - **Interactive Menu**: Guided configuration for quality, formats, subtitles, and post-processing.
 - **Flexible URL Input**: Provide URLs via command line or enter them interactively within the menu
-- **Smart Review**: Presents a clear summary of your settings (Content, Visuals, Data) before you hit download.
 - **Quick Mode**: One-command instant download using optimized "Best Quality" defaults `--quick`.
 - **Live Stream Archiving**: Record live streams from the very start with `--live-from-start`, so you keep your own copy even if the broadcaster deletes it afterwards.
-- **Modern Support**: Includes `Deno` runtime to handle complex JavaScript challenges from sites like YouTube.
+- **Runtime**: Includes `Deno` runtime to handle complex JavaScript challenges from sites like YouTube.
 - **Hardened Security**: Strict SHA256 binary verification, root-execution prevention, and safe temporary file handling.
 
 ## Prerequisites
@@ -71,10 +70,10 @@ Skip the menus entirely and download immediately with **Best Video + Best Audio*
 ./download.sh --quick "URL1" "URL2" "URL3"
 ```
 
-*This mode uses the same defaults as Interactive Mode (Best quality, MKV container, embedded JPG thumbnails) — the only difference is that it skips the menu loop entirely. Batch downloading multiple URLs also works in Interactive Mode via "Manage URLs".*
+*This mode uses the same defaults as Interactive Mode (Best quality, MKV container, embedded JPG thumbnails) - the only difference is that it skips the menu loop entirely. Batch downloading multiple URLs also works in Interactive Mode via "Manage URLs".*
 
 #### `--live`: recording flag (works with either mode)
-Add `--live` to record from the actual start of a broadcast instead of joining midway — useful for archiving a stream before the broadcaster deletes it. It is a modifier, not a mode of its own:
+Add `--live` to record from the actual start of a broadcast instead of joining midway - useful for archiving a stream before the broadcaster deletes it. It is a modifier, not a mode of its own:
 ```bash
 # Automated one-liner (no menus at all)
 ./download.sh --quick --live "https://youtube.com/watch?v=LIVE_ID"
