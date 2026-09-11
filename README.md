@@ -1,159 +1,81 @@
 # yt-dlp-portable
 
-A robust, portable, and interactive shell wrapper for `yt-dlp`.
-Designed to make video downloading simple, secure, and fully configurable without polluting your PC.
+A menu-driven wrapper around [yt-dlp](https://github.com/yt-dlp/yt-dlp) that doesn't touch your system. Everything it needs (yt-dlp itself, FFmpeg, and Deno) gets downloaded straight into a `bin/` folder next to the scripts, checksummed, and left alone. No `pip install`, no root, nothing added to your PATH.
 
-## Key Features
+Deno is in there because YouTube throws JavaScript challenges at extractors these days, and yt-dlp needs a JS runtime to solve them. That's the only reason it's a dependency at all.
 
-- **Portable**: Automatically manages `yt-dlp`, `FFmpeg`, and `Deno` inside a local `bin/` folder.
-- **Interactive Menu**: Guided configuration for quality, formats, subtitles, and post-processing.
-- **Flexible URL Input**: Provide URLs via command line or enter them interactively within the menu
-- **Quick Mode**: One-command instant download using optimized "Best Quality" defaults `--quick`.
-- **Live Stream Archiving**: Record live streams from the very start with `--live-from-start`, so you keep your own copy even if the broadcaster deletes it afterwards.
-- **Runtime**: Includes `Deno` runtime to handle complex JavaScript challenges from sites like YouTube.
-- **Hardened Security**: Strict SHA256 binary verification, root-execution prevention, and safe temporary file handling.
+## What you need
 
-## Prerequisites
+Linux, x86_64, and about a gigabyte of free space. `curl`, `tar`, `unzip`, and `sha256sum`, which is to say, whatever's already on your distro.
 
-To run this project, your system must meet the following requirements:
-- **OS**: Linux (x86_64 architecture).
-- **Disk Space**: At least **1GB** of available space for binaries and temporary processing.
-- **Tools**: `curl`, `tar`, `unzip`, and `sha256sum` (standard on most Linux distros).
+`setup.sh` takes care of [yt-dlp](https://github.com/yt-dlp/yt-dlp), [FFmpeg](https://github.com/yt-dlp/FFmpeg-Builds), and [Deno](https://github.com/denoland/deno) itself, so you don't need any of those installed beforehand.
 
-This project requires the following binaries inside the `bin/` folder:
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-- [FFmpeg](https://github.com/yt-dlp/FFmpeg-Builds)
-- [Deno](https://github.com/denoland/deno) (for JS challenges)
+## Getting it running
 
-> **Note:** An external JavaScript runtime (Deno) is integrated into this project to solve JavaScript challenges presented by platforms like YouTube. [Read more](https://github.com/yt-dlp/yt-dlp/issues/15012).
-
-## Installation
-
-1. **Clone this repository**:
 ```bash
 git clone https://github.com/independent-arg/yt-dlp-portable.git
 cd yt-dlp-portable
-```
-
-2. **Grant execution permissions**:
-```bash
-chmod +x *.sh
-```
-
-3. **Run the setup script**:
-```bash
+chmod +x setup.sh download.sh lib.sh
 ./setup.sh
 ```
-*This will automatically download and verify the latest binaries (yt-dlp, FFmpeg, Deno) into the `bin/` directory.*
 
-## Usage
+`setup.sh` figures out what's missing and offers to grab it. Every binary gets its SHA256 checked against what the upstream project publishes before it's allowed to run. If a download is corrupted or tampered with, you'll get an error instead of a bad binary sitting in `bin/`.
 
-### Interactive Mode (Guided)
-Launch the menu to configure every aspect of your download.
+![setup.sh on a fresh clone](screenshots/setup.png)
+
+Run it again whenever you want to check for a newer yt-dlp. It nightly-tracks upstream, since that's the channel yt-dlp itself recommends for getting extractor fixes quickly.
+
+## Downloading things
+
+Works on YouTube, Twitch, and pretty much anywhere else yt-dlp does, which by now is most of the internet.
+
 ```bash
 ./download.sh
 ```
-You can also pass URLs as arguments to skip the URL manager:
+
+With no arguments it drops you into a menu. Add a URL, pick a format, decide if you want subtitles or a thumbnail embedded, and go:
+
+![download.sh's main menu](screenshots/main-menu.png)
+
+Before anything actually downloads, option 8 shows you a plain-language summary of what's about to happen (useful the moment your configuration gets more interesting than "just give me the video"):
+
+![the pre-download summary screen](screenshots/summary.png)
+
+If you already know what you want, skip the menu entirely:
+
 ```bash
-./download.sh "https://youtu.be/example"
-```
-To record a live stream from the start, use menu option **7) Configure Live Stream Recording** (also lets you set a wait timer for streams that haven't started yet).
-
-### Quick Mode (Fastest)
-Skip the menus entirely and download immediately with **Best Video + Best Audio** settings — ideal for scripts, cron jobs, or any non-interactive use.
-```bash
-./download.sh --quick "https://youtu.be/example"
-# or
-./download.sh -q "https://youtu.be/example"
-
-# Works with multiple URLs too (batch download)
-./download.sh --quick "URL1" "URL2" "URL3"
-```
-
-*This mode uses the same defaults as Interactive Mode (Best quality, MKV container, embedded JPG thumbnails) - the only difference is that it skips the menu loop entirely. Batch downloading multiple URLs also works in Interactive Mode via "Manage URLs".*
-
-#### `--live`: recording flag (works with either mode)
-Add `--live` to record from the actual start of a broadcast instead of joining midway - useful for archiving a stream before the broadcaster deletes it. It is a modifier, not a mode of its own:
-```bash
-# Automated one-liner (no menus at all)
-./download.sh --quick --live "https://youtube.com/watch?v=LIVE_ID"
-```
-`--live` maps to yt-dlp's `--live-from-start`. Without `--quick` it just pre-selects the option before showing the interactive menu; the menu is where you'd also set `--wait-for-video` for streams that haven't started yet.
-
-### Help
-
-Show usage information:
-```bash
-./download.sh --help
-# or
-./download.sh -h
+./download.sh --quick "https://youtu.be/whatever"
+./download.sh --quick "url1" "url2" "url3"   # batches fine
 ```
 
-## Interactive Menu Options
+`--quick` uses sane defaults (best video+audio, thumbnail embedded, MKV container) and never stops to ask you anything, which matters if you're calling it from cron. And if what you're grabbing is a live stream that might get taken down, add `--live` to record from the actual start of the broadcast instead of wherever it happens to be when you join:
 
-The interactive menu allows you to configure:
+```bash
+./download.sh --quick --live "https://youtube.com/watch?v=some-livestream"
+```
 
-1. **Manage URLs**: Add, clear, and list the URLs to be downloaded.
-2. **Configure Output Directory**: Set a custom folder (persisted between sessions).
-3. **Subtitles**: Download, embed, or both (with language selection).
-4. **Thumbnail**: Embed and convert to JPG/PNG, or disable embedding.
-5. **Metadata & Chapters**: Embed video metadata, chapter markers, and complete info.json.
-6. **Format & Quality**: 
-   - Best quality (Best Video + Best Audio)
-   - Specific resolution (e.g., 1080p, 720p)
-   - Video only / Audio only
-   - Remux to specific container (MP4, MKV, WebM, etc.)
-   - Custom format
-7. **Audio Extraction**: Convert to MP3, AAC, OPUS, FLAC, M4A, VORBIS, or WAV.
-8. **Playlist Handling**:
-   - Single video mode, entire playlist, or specific ranges.
-   - Reverse order and folder organization.
-9. **Download Archive**: Avoid duplicates using a tracking file.
-10. **Output filename**: Choose from presets or create custom templates.
-11. **Advanced Options**:
-   - Verbose mode, ASCII filenames, and original date preservation.
-   - Concurrent fragments and request sleep timers.
-12. **Live Stream Recording**:
-   - Record ongoing live streams from the start (`--live-from-start`) so you have a local copy even if the broadcaster deletes it later.
-   - Wait for scheduled/upcoming streams to go live (`--wait-for-video`).
-13. **View Current Configuration**: Review all settings before execution.
-14. **Check for Updates**: Re-run the setup process to update binaries.
+## A couple of things worth knowing
 
-## Project Structure
+- The output directory you pick, and the download-archive file that tracks what you've already grabbed, are remembered **per folder** (wherever you happen to run `download.sh` from). Keep separate download projects in separate folders and they won't step on each other.
+- Picking "remux to a container" and "extract audio" are mutually exclusive: turning one on turns the other off, since extracting audio throws away the video stream a remux would apply to.
+- Everything yt-dlp itself already defaults to sensibly, this wrapper leaves alone. The options here are the ones that are actually worth having an opinion about.
 
-```text
+## When something goes wrong
+
+- `Binary not found` → you haven't run `./setup.sh` yet, or it didn't finish.
+- Permission errors → `chmod +x setup.sh download.sh lib.sh`.
+- A download just fails → turn on Verbose mode in Advanced Settings and read what yt-dlp actually says. Half the time it's a region lock or a site that wants a login.
+
+## Layout
+
+```
 yt-dlp-portable/
-├── download.sh      # Main downloader wrapper
-├── setup.sh         # Environment provisioning & verification
-├── bin/             # Local binaries (managed by setup.sh)
-│   ├── deno
-│   ├── ffmpeg
-│   ├── ffprobe
-│   └── yt-dlp
-└── README.md
+├── setup.sh     # grabs and verifies yt-dlp, ffmpeg, deno
+├── download.sh  # the actual downloader
+├── lib.sh       # shared bits (colors, banner, path handling)
+└── bin/         # where setup.sh puts everything
 ```
-## Supported Platforms
-
-- YouTube
-- Twitch
-- And all other platforms supported by yt-dlp
-
-## Troubleshooting
-
-- Binary not found: Run `./setup.sh` to reinstall components.
-- Permission denied: Run `chmod +x *.sh`
-
-#### Download fails
-- Check your internet connection.
-- Ensure you have free space.
-- Try **Verbose mode** in Advanced Options to see detailed error logs.
-- Some videos may be region-locked or require authentication
-- For YouTube errors, ensure `setup.sh` completed successfully to install Deno.
 
 ## License
 
-This project is a wrapper script. The downloaded binaries (`yt-dlp`, `FFmpeg`, `Deno`) are subject to their respective licenses.
-
----
-
-**Note**: This project is designed for Linux x86_64 systems.
+The scripts are MIT. yt-dlp, FFmpeg, and Deno bring their own licenses along with them.

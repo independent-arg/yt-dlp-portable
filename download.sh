@@ -2,37 +2,36 @@
 
 # ==============================================================================
 # Script Name: yt-dlp-portable (download.sh)
-# Version:     v0.10.0
 # Author:      independent-arg
 # License:     MIT
 # ==============================================================================
 
 set -euo pipefail
+shopt -s inherit_errexit
+
+LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=lib.sh
+source "${LIB_DIR}/lib.sh"
 
 # ==============================================================================
-# CONSTANTS & CONFIGURATION
+# CONSTANTS & GLOBAL STATE
 # ==============================================================================
-
-readonly VERSION="v0.10.0"
-readonly LAST_UPDATED="2026-09-01"
 
 readonly CONFIG_FILE=".yt-dlp-portable.config"
 readonly BINDIR="bin"
 
-# Colors
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-
-# Global State
+# Config (last-used OUTPUT_DIR) and the download-archive file are intentionally
+# resolved relative to the CURRENT directory, not this script's location. cd
+# into whatever folder you're organizing downloads in and each folder keeps
+# its own remembered output dir and dedup history. Binaries, by contrast, are
+# always resolved relative to the script's own real path (see get_bin_dir),
+# so this still works if download.sh is invoked via an absolute path or a
+# symlink from elsewhere.
 declare -A OPTIONS
 declare -a URL_LIST=()
 OUTPUT_DIR=""
+QUICK_MODE=false
 
-# Signal Handler - Ctrl+C (SIGINT) to show message and exit with code 130
 trap 'printf "\n%b[INFO] Script interrupted by user.%b\n" "${YELLOW}" "${NC}"; exit 130' INT
 
 # ==============================================================================
@@ -41,29 +40,24 @@ trap 'printf "\n%b[INFO] Script interrupted by user.%b\n" "${YELLOW}" "${NC}"; e
 
 load_config() {
     if [[ -f "$CONFIG_FILE" ]]; then
-        # Manually parse configuration to avoid arbitrary code execution via source
-        # We only look for OUTPUT_DIR as it's the only variable currently persisted
+        # Manually parse configuration to avoid arbitrary code execution via
+        # source. We only look for OUTPUT_DIR since it's the only persisted key.
         local config_line
         config_line=$(grep "^OUTPUT_DIR=" "$CONFIG_FILE" | head -n 1) || :
 
         if [[ -n "$config_line" ]]; then
             local val="${config_line#OUTPUT_DIR=}"
-            # Remove surrounding double quotes
             val="${val%\"}"
             val="${val#\"}"
-            # Unescape double quotes
             OUTPUT_DIR="${val//\\\"/\"}"
         fi
     fi
 }
 
 save_config() {
-    # Sanitize OUTPUT_DIR for storage
-    # We escape double quotes to maintain valid shell syntax in the file
     local safe_dir="${OUTPUT_DIR//\"/\\\"}"
-
     if ! printf "OUTPUT_DIR=\"%s\"\n" "$safe_dir" > "$CONFIG_FILE"; then
-        printf "%b[ERROR]%b Failed to save configuration to %s\n" "${RED}" "${NC}" "$CONFIG_FILE" >&2
+        _error "Failed to save configuration to $CONFIG_FILE"
         return 1
     fi
 }
@@ -72,21 +66,12 @@ save_config() {
 # SYSTEM UTILITIES
 # ==============================================================================
 
+get_script_dir() {
+    dirname "$(resolve_script_path)"
+}
+
 get_bin_dir() {
-    local script_path
-    if command -v readlink >/dev/null 2>&1 && readlink -f "$0" >/dev/null 2>&1; then
-        script_path=$(readlink -f "$0")
-    else
-        script_path="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
-    fi
-
-    # readlink -f can resolve a broken symlink without error, so verify the target actually exists
-    if [[ ! -f "$script_path" ]]; then
-        printf "%b[ERROR] Could not resolve script location (broken symlink?): %s%b\n" "${RED}" "$script_path" "${NC}" >&2
-        exit 1
-    fi
-
-    printf "%s/%s" "$(dirname "$script_path")" "$BINDIR"
+    printf '%s/%s' "$(get_script_dir)" "$BINDIR"
 }
 
 refresh_screen() {
@@ -117,7 +102,10 @@ init_defaults() {
     OPTIONS[output_template]="%(title)s [%(id)s].%(ext)s"
     OPTIONS[verbose]="yes"
     OPTIONS[restrict_filenames]="yes"
-    OPTIONS[no_mtime]="yes"
+    # "no" matches yt-dlp's own default (--no-mtime) so nothing extra needs to
+    # be passed on the common path; "yes" is the one case that needs an
+    # explicit --mtime (see execute_ytdlp).
+    OPTIONS[preserve_mtime]="no"
     OPTIONS[concurrent_fragments]="5"
     OPTIONS[sleep_requests]="1.5"
     OPTIONS[playlist_handling]="auto"
@@ -135,79 +123,57 @@ init_defaults() {
 }
 
 # ==============================================================================
-# UI HELPERS
+# SYSTEM CHECKS
 # ==============================================================================
 
-show_banner() {
-    local banner_line="============================================"
-    local width=${#banner_line}
-    local text1="yt-dlp-portable independent-arg"
-    local text2="${VERSION}"
-
-    for text in "$text1" "$text2"; do
-        if (( ${#text} > width )); then
-            width=${#text}
-        fi
-    done
-
-    banner_line=$(printf "%*s" "${width}" "" | tr ' ' '=')
-
-    _print_centered() {
-        local text="$1"
-        local color="$2"
-        local text_len=${#text}
-        local padding=$(( (width - text_len) / 2 ))
-
-        printf "%b%*s%s%*s%b\n" "${color}" "${padding}" "" "${text}" "$((width - text_len - padding))" "" "${NC}"
-    }
-
-    printf "\n"
-    printf "%b%s%b\n" "${BLUE}" "${banner_line}" "${NC}"
-    _print_centered "$text1" "${CYAN}"
-    _print_centered "$text2" "${YELLOW}"
-    printf "%b%s%b\n" "${BLUE}" "${banner_line}" "${NC}"
-    printf "\n"
-}
-
 check_system() {
-    if [ "$EUID" -eq 0 ]; then
-        printf "%b[ERROR] Please do not run this script as root.%b\n" "${RED}" "${NC}"
-        printf "%bThis script does not require root privileges and running as root is a security risk.%b\n" "${RED}" "${NC}"
-        exit 1
-    fi
+    require_non_root
 
-    local path_to_bin
+    local path_to_bin bin current_file
     path_to_bin=$(get_bin_dir)
 
     for bin in "yt-dlp" "ffmpeg" "ffprobe" "deno"; do
-        local current_file="$path_to_bin/$bin"
+        current_file="$path_to_bin/$bin"
         if [[ ! -f "$current_file" ]]; then
-            printf "[ERROR] Binary not found: %s\n" "$bin"
-            printf "Please run: bash setup.sh\n"
+            _error "Binary not found: $bin"
+            _error "Please run: bash setup.sh"
             exit 1
         fi
         if [[ ! -x "$current_file" ]]; then
-            printf "[WARN] Fixing execution permissions for %s...\n" "$bin"
+            _warn "Fixing execution permissions for $bin..."
             chmod +x "$current_file"
         fi
     done
 
-    # Disk space check
-    local available
-    available=$(df -P . | awk 'NR==2 {print $4}')
-    local available_mb=$((available / 1024))
+    # Check space where the files will actually land, not necessarily the
+    # current directory. Walk up to the nearest existing ancestor since
+    # OUTPUT_DIR may not have been created yet.
+    local target_dir="${OUTPUT_DIR:-.}"
+    while [[ ! -d "$target_dir" ]]; do
+        target_dir="$(dirname "$target_dir")"
+    done
 
-    if [ "$available" -lt 1048576 ]; then
-        printf "%b[WARN] Low disk space: %sMB available%b\n" "${YELLOW}" "$available_mb" "${NC}"
+    local available_kb available_mb
+    available_kb=$(df -Pk "$target_dir" | awk 'NR==2 {print $4}')
+    available_mb=$((available_kb / 1024))
+
+    if [[ "$available_kb" -lt 1048576 ]]; then
+        _warn "Low disk space: ${available_mb}MB available in ${target_dir}"
         printf "%bLarge downloads may fail. Consider freeing up space.%b\n" "${YELLOW}" "${NC}"
 
-        local reply=""
-        read -rp "Continue anyway? (y/N): " -n 1 reply
-        printf "\n"
-
-        if [[ "${reply,,}" != "y" ]]; then
-            printf "%bDownload cancelled by user.%b\n" "${YELLOW}" "${NC}"
-            exit 0
+        if [[ "$QUICK_MODE" == "true" ]]; then
+            # --quick is documented for cron/unattended use, so it must never
+            # block on a prompt (an unattended `read` would either hang or
+            # read EOF as "no" and silently exit 0 without downloading).
+            _warn "Continuing anyway (--quick never blocks on a prompt)."
+        else
+            local reply=""
+            read -rp "Continue anyway? (y/N): " -n 1 reply
+            printf "\n"
+            if [[ "${reply,,}" != "y" ]]; then
+                printf "%bDownload cancelled by user.%b\n" "${YELLOW}" "${NC}"
+                exit 0
+            fi
         fi
     fi
 }
@@ -215,11 +181,6 @@ check_system() {
 # ==============================================================================
 # MENUS
 # ==============================================================================
-
-press_enter() {
-    printf "\n"
-    read -rp "Press Enter to continue..."
-}
 
 manage_urls() {
     local choice="" new_url="" i
@@ -261,7 +222,7 @@ manage_output_dir() {
         case "$choice" in
             1)  read -rp "Absolute path: " new_dir
                 if [[ -n "$new_dir" ]]; then
-                    if [[ ! "$new_dir" =~ ^/ && ! "$new_dir" =~ ^[a-zA-Z]: ]]; then
+                    if [[ "$new_dir" != /* ]]; then
                         printf "\n%b[WARN] Path does not appear to be absolute. Using relative path.%b\n" "${YELLOW}" "${NC}"
                     fi
                     if [[ ! -d "$new_dir" ]]; then
@@ -269,13 +230,25 @@ manage_output_dir() {
                         printf "\n"
                         if [[ "${reply,,}" == "y" ]] && mkdir -p "$new_dir"; then
                             printf "%bDirectory created.%b\n" "${GREEN}" "${NC}"
-                            OUTPUT_DIR="$new_dir"; save_config
+                            OUTPUT_DIR="$new_dir"
+                            save_config || _warn "Directory set for this session, but could not save it to $CONFIG_FILE"
                         fi
                     else
-                        OUTPUT_DIR="$new_dir"; save_config; printf "%bDirectory set.%b\n" "${GREEN}" "${NC}"
+                        OUTPUT_DIR="$new_dir"
+                        if save_config; then
+                            printf "%bDirectory set.%b\n" "${GREEN}" "${NC}"
+                        else
+                            _warn "Directory set for this session, but could not save it to $CONFIG_FILE"
+                        fi
                     fi
                 fi; sleep 1 ;;
-            2)  OUTPUT_DIR=""; save_config; printf "%bDirectory reset to default.%b\n" "${GREEN}" "${NC}"; sleep 1 ;;
+            2)  OUTPUT_DIR=""
+                if save_config; then
+                    printf "%bDirectory reset to default.%b\n" "${GREEN}" "${NC}"
+                else
+                    _warn "Could not save this to $CONFIG_FILE"
+                fi
+                sleep 1 ;;
             3)  return ;;
             *)  printf "%bInvalid option.%b\n" "${RED}" "${NC}"; sleep 1 ;;
         esac
@@ -392,28 +365,41 @@ configure_format_and_audio() {
                 read -rp "Target container (mp4, mkv, etc): " remux
                 remux=$(tr -cd 'a-z0-9' <<< "$remux")
                 if [[ -n "$remux" ]]; then
+                    if [[ "${OPTIONS[extract_audio]}" == "yes" ]]; then
+                        printf "%b[INFO] Disabling audio extraction: remuxing applies to the video container.%b\n" "${CYAN}" "${NC}"
+                        OPTIONS[extract_audio]="no"; OPTIONS[audio_format]=""; OPTIONS[audio_quality]=""
+                        OPTIONS[format]="bestvideo*+bestaudio/best"
+                    fi
                     OPTIONS[remux_video]="$remux"
                     printf "\n%bRemux set to: %s%b\n" "${GREEN}" "$remux" "${NC}"
                 else
                     printf "\n%b[ERROR] Invalid container format.%b\n" "${RED}" "${NC}"
                 fi; sleep 1 ;;
             3)
-                printf "1) Disable extraction\n2) MP3\n3) AAC\n4) OPUS\n5) FLAC\n6) M4A\n7) WAV\n\n"
-                read -rp "Select sub-option [1-7]: " choice
+                printf "1) Disable extraction\n2) MP3\n3) AAC\n4) OPUS\n5) FLAC\n6) M4A\n7) WAV\n8) ALAC\n9) VORBIS\n\n"
+                read -rp "Select sub-option [1-9]: " choice
                 if [[ "$choice" == "1" ]]; then
                     OPTIONS[extract_audio]="no"; OPTIONS[audio_format]=""; OPTIONS[audio_quality]=""
                     # Restore a video+audio format if it was auto-switched to audio-only
                     if [[ "${OPTIONS[format]}" == "bestaudio/best" || "${OPTIONS[format]}" == "bestaudio" ]]; then
                         OPTIONS[format]="bestvideo*+bestaudio/best"
+                        printf "\n%b[INFO] Video format reset to the default (best video + best audio).%b\n" "${CYAN}" "${NC}"
                     fi
                     printf "\n%bAudio extraction disabled.%b\n" "${GREEN}" "${NC}"
                 else
-                    case "$choice" in 2) fmt="mp3";; 3) fmt="aac";; 4) fmt="opus";; 5) fmt="flac";; 6) fmt="m4a";; 7) fmt="wav";; *) printf "\n%bInvalid sub-option.%b\n" "${RED}" "${NC}"; sleep 1; continue ;; esac
+                    case "$choice" in
+                        2) fmt="mp3";; 3) fmt="aac";; 4) fmt="opus";; 5) fmt="flac";;
+                        6) fmt="m4a";; 7) fmt="wav";; 8) fmt="alac";; 9) fmt="vorbis";;
+                        *) printf "\n%bInvalid sub-option.%b\n" "${RED}" "${NC}"; sleep 1; continue ;;
+                    esac
+                    if [[ -n "${OPTIONS[remux_video]}" ]]; then
+                        printf "%b[INFO] Clearing remux container (%s): audio extraction discards the video stream.%b\n" "${CYAN}" "${OPTIONS[remux_video]}" "${NC}"
+                    fi
                     OPTIONS[extract_audio]="yes"; OPTIONS[audio_format]="$fmt"
                     # Avoid downloading and discarding a full video stream just to extract audio
                     OPTIONS[format]="bestaudio/best"; OPTIONS[remux_video]=""; OPTIONS[max_res_sort]=""
-                    if [[ "$fmt" != "flac" && "$fmt" != "wav" ]]; then
-                        read -rp "Quality [0=best, 5=default, 9=worst]: " qual
+                    if [[ "$fmt" != "flac" && "$fmt" != "wav" && "$fmt" != "alac" ]]; then
+                        read -rp "Quality [0=best, 5=default, 10=worst]: " qual
                         OPTIONS[audio_quality]=$(tr -cd '0-9' <<< "${qual:-5}")
                     else OPTIONS[audio_quality]="0"; fi
                     printf "\n%bAudio extraction configured.%b\n" "${GREEN}" "${NC}"
@@ -425,13 +411,13 @@ configure_format_and_audio() {
 }
 
 configure_automation_naming() {
-    local choice="" items="" name=""
+    local choice="" items="" name="" limit=""
 
     while true; do
         refresh_screen
         printf "%b=== Configure Automation & Naming ===%b\n\n" "${YELLOW}" "${NC}"
         printf "1) Playlist Handling: [%s] (Items: %s, Rev: %s)\n" "${OPTIONS[playlist_handling]}" "${OPTIONS[playlist_items]:-all}" "${OPTIONS[playlist_reverse]}"
-        printf "2) History Archive:    [%s] (File: %s)\n" "${OPTIONS[use_archive]}" "${OPTIONS[archive_file]}"
+        printf "2) History Archive:    [%s] (File: %s, Limit: %s)\n" "${OPTIONS[use_archive]}" "${OPTIONS[archive_file]}" "${OPTIONS[max_downloads]:-none}"
         printf "3) Output Name Naming: [%s]\n" "${OPTIONS[output_template]}"
         printf "4) Back\n\n"
 
@@ -454,17 +440,26 @@ configure_automation_naming() {
                 esac
                 printf "\n%bPlaylist settings updated.%b\n" "${GREEN}" "${NC}"; sleep 1 ;;
             2)
-                printf "1) Don't use archive\n2) Use archive (skip downloaded)\n3) Use archive + stop on existing\n4) View history entries\n5) Delete history file\n\n"
-                read -rp "Select sub-option [1-5]: " choice
+                printf "1) Don't use archive\n2) Use archive (skip downloaded)\n3) Use archive + stop on existing\n4) Set download limit (current: %s)\n5) View history entries\n6) Delete history file\n\n" "${OPTIONS[max_downloads]:-none}"
+                read -rp "Select sub-option [1-6]: " choice
                 case "$choice" in
                     1) OPTIONS[use_archive]="no"; OPTIONS[break_on_existing]="no" ;;
-                    2) OPTIONS[use_archive]="yes"; OPTIONS[break_on_existing]="no"
+                    2|3)
+                       OPTIONS[use_archive]="yes"
+                       OPTIONS[break_on_existing]=$([[ "$choice" == "3" ]] && echo "yes" || echo "no")
                        read -rp "Archive filename [${OPTIONS[archive_file]}]: " name
                        [[ -n "$name" ]] && OPTIONS[archive_file]="$name" ;;
-                    3) OPTIONS[use_archive]="yes"; OPTIONS[break_on_existing]="yes" ;;
-                    4) if [[ -f "${OPTIONS[archive_file]}" ]]; then tail -n 10 "${OPTIONS[archive_file]}" || :; press_enter
+                    4) read -rp "Max new downloads this run [Enter to clear]: " limit
+                       if [[ -z "$limit" ]]; then
+                           OPTIONS[max_downloads]=""
+                       elif [[ "$limit" =~ ^[0-9]+$ ]]; then
+                           OPTIONS[max_downloads]="$limit"
+                       else
+                           printf "\n%b[ERROR] Must be a whole number.%b\n" "${RED}" "${NC}"; sleep 1; continue
+                       fi ;;
+                    5) if [[ -f "${OPTIONS[archive_file]}" ]]; then tail -n 10 "${OPTIONS[archive_file]}" || :; press_enter
                        else printf "%bArchive file does not exist yet.%b\n" "${YELLOW}" "${NC}"; sleep 1; fi; continue ;;
-                    5) rm -f "${OPTIONS[archive_file]}"; printf "%bArchive deleted.%b\n" "${GREEN}" "${NC}"; sleep 1; continue ;;
+                    6) rm -f "${OPTIONS[archive_file]}"; printf "%bArchive deleted.%b\n" "${GREEN}" "${NC}"; sleep 1; continue ;;
                     *) printf "\n%bInvalid sub-option.%b\n" "${RED}" "${NC}"; sleep 1; continue ;;
                 esac
                 printf "\n%bArchive settings updated.%b\n" "${GREEN}" "${NC}"; sleep 1 ;;
@@ -493,12 +488,12 @@ configure_advanced_settings() {
         refresh_screen
 
         printf "%b=== Advanced Engine Settings ===%b\n\n" "${YELLOW}" "${NC}"
-        printf "1) Verbose mode:            [%s]\n" "$([[ "${OPTIONS[verbose]}" == "yes" ]] && echo "Enabled" || echo "Disabled")"
-        printf "2) Restrict ASCII names:    [%s]\n" "$([[ "${OPTIONS[restrict_filenames]}" == "yes" ]] && echo "Enabled" || echo "Disabled")"
-        printf "3) Preserve original date:  [%s]\n" "$([[ "${OPTIONS[no_mtime]}" == "yes" ]] && echo "Disabled" || echo "Enabled")"
-        printf "4) Ignore errors (playlist):[%s]\n" "$([[ "${OPTIONS[ignore_errors]}" == "yes" ]] && echo "Enabled" || echo "Disabled")"
-        printf "5) Concurrent fragments:     [%s]\n" "${OPTIONS[concurrent_fragments]}"
-        printf "6) Sleep between requests:   [%ss]\n" "${OPTIONS[sleep_requests]}"
+        printf "1) Verbose mode:                  [%s]\n" "$([[ "${OPTIONS[verbose]}" == "yes" ]] && echo "Enabled" || echo "Disabled")"
+        printf "2) Restrict ASCII names:          [%s]\n" "$([[ "${OPTIONS[restrict_filenames]}" == "yes" ]] && echo "Enabled" || echo "Disabled")"
+        printf "3) Preserve original upload date: [%s]\n" "$([[ "${OPTIONS[preserve_mtime]}" == "yes" ]] && echo "Enabled" || echo "Disabled")"
+        printf "4) Ignore errors (playlist):      [%s]\n" "$([[ "${OPTIONS[ignore_errors]}" == "yes" ]] && echo "Enabled" || echo "Disabled")"
+        printf "5) Concurrent fragments:           [%s]\n" "${OPTIONS[concurrent_fragments]}"
+        printf "6) Sleep between requests:         [%ss]\n" "${OPTIONS[sleep_requests]}"
         printf "7) Back\n\n"
 
         read -rp "Select an option [1-7]: " choice
@@ -507,7 +502,7 @@ configure_advanced_settings() {
         case "$choice" in
             1) OPTIONS[verbose]=$([[ "${OPTIONS[verbose]}" == "yes" ]] && echo "no" || echo "yes") ;;
             2) OPTIONS[restrict_filenames]=$([[ "${OPTIONS[restrict_filenames]}" == "yes" ]] && echo "no" || echo "yes") ;;
-            3) OPTIONS[no_mtime]=$([[ "${OPTIONS[no_mtime]}" == "yes" ]] && echo "no" || echo "yes") ;;
+            3) OPTIONS[preserve_mtime]=$([[ "${OPTIONS[preserve_mtime]}" == "yes" ]] && echo "no" || echo "yes") ;;
             4) OPTIONS[ignore_errors]=$([[ "${OPTIONS[ignore_errors]}" == "yes" ]] && echo "no" || echo "yes") ;;
             5)  read -rp "Fragments [1-10]: " f
                 [[ "$f" =~ ^[0-9]+$ ]] && OPTIONS[concurrent_fragments]="$f" ;;
@@ -698,7 +693,7 @@ view_config() {
     printf "%b• System:%b  " "${GREEN}" "${NC}"
     [[ "${OPTIONS[verbose]}" == "yes" ]] && sys_opts+=("Verbose")
     [[ "${OPTIONS[restrict_filenames]}" == "yes" ]] && sys_opts+=("ASCII Filenames")
-    [[ "${OPTIONS[no_mtime]}" == "yes" ]] && sys_opts+=("No Original Date")
+    [[ "${OPTIONS[preserve_mtime]}" == "yes" ]] && sys_opts+=("Preserve Original Date")
     [[ "${OPTIONS[ignore_errors]}" == "yes" ]] && sys_opts+=("Ignore Errors")
 
     if [ ${#sys_opts[@]} -gt 0 ]; then
@@ -725,10 +720,14 @@ check_updates() {
 
     printf "%bChecking for updates and components...%b\n\n" "${YELLOW}" "${NC}"
 
-    if [[ -f "setup.sh" ]]; then
-        bash ./setup.sh || :
+    local script_dir setup_script
+    script_dir=$(get_script_dir)
+    setup_script="${script_dir}/setup.sh"
+
+    if [[ -f "$setup_script" ]]; then
+        bash "$setup_script" || :
     else
-        printf "%b[ERROR] setup.sh not found in the current directory.%b\n" "${RED}" "${NC}"
+        _error "setup.sh not found next to download.sh (looked in $script_dir)"
     fi
 
     press_enter
@@ -756,7 +755,7 @@ main_menu_loop() {
         printf "2) Configure Output Directory\n"
         printf "3) Configure Post-Processing (Subtitles, Thumbnail, Metadata)\n"
         printf "4) Configure Format & Audio Extraction\n"
-        printf "5) Configure Automation & Output Templates (Playlists, Archives)\n"
+        printf "5) Configure Automation & Output Templates (Playlists, Archives, Limits)\n"
         printf "6) Configure Advanced Settings (Fragments, Sleep, Verbose)\n"
         printf "7) Configure Live Stream Recording (Save streams before they're deleted)\n"
         printf "8) View Current Configuration Summary\n"
@@ -801,25 +800,21 @@ main_menu_loop() {
 # ==============================================================================
 
 execute_ytdlp() {
-    local path_to_bin=""
-    local ytdlp_bin=""
-    local ffmpeg_bin=""
-    local deno_bin=""
-    local sub_lang=""
-    local exit_code=0
+    local path_to_bin="" ytdlp_bin="" ffmpeg_bin="" deno_bin="" sub_lang="" exit_code=0
 
-    # Resolve binary path
     path_to_bin=$(get_bin_dir)
-
     ytdlp_bin="$path_to_bin/yt-dlp"
     ffmpeg_bin="$path_to_bin/ffmpeg"
     deno_bin="$path_to_bin/deno"
 
     local cmd=("$ytdlp_bin")
 
-    # Common Flags
+    # Common flags. Note: --retries/--fragment-retries are deliberately NOT
+    # set here: yt-dlp's own defaults are already 10/10, so passing them
+    # would just be noise. --socket-timeout and --concurrent-fragments ARE
+    # real overrides of yt-dlp's defaults (unbounded / 1), so those stay.
     [[ "${OPTIONS[verbose]}" == "yes" ]] && cmd+=(--verbose)
-    cmd+=(--socket-timeout 30 --retries 10 --fragment-retries 10)
+    cmd+=(--socket-timeout 30)
     cmd+=(--sleep-requests "${OPTIONS[sleep_requests]}")
     cmd+=(--concurrent-fragments "${OPTIONS[concurrent_fragments]}")
     cmd+=(--ffmpeg-location "$ffmpeg_bin")
@@ -845,6 +840,9 @@ execute_ytdlp() {
         [[ -n "${OPTIONS[playlist_items]}" ]] && cmd+=(-I "${OPTIONS[playlist_items]}")
         [[ "${OPTIONS[playlist_reverse]}" == "yes" ]] && cmd+=(--playlist-reverse)
     fi
+    # "auto" (the default) adds no flag at all: yt-dlp's own behavior of
+    # downloading the whole playlist only when the URL is a playlist link is
+    # already the sane default, so there's nothing to override here.
 
     # Ignore errors (useful for playlists)
     if [[ "${OPTIONS[ignore_errors]}" == "yes" ]]; then
@@ -898,9 +896,12 @@ execute_ytdlp() {
     # Remux
     [[ -n "${OPTIONS[remux_video]}" ]] && cmd+=(--remux-video "${OPTIONS[remux_video]}")
 
-    # Filenames
+    # Filenames / mtime. restrict-filenames deviates from yt-dlp's default so
+    # it's always passed explicitly when enabled. mtime is the opposite case:
+    # yt-dlp already defaults to --no-mtime, so we only ever need to pass the
+    # explicit --mtime override, never --no-mtime.
     [[ "${OPTIONS[restrict_filenames]}" == "yes" ]] && cmd+=(--restrict-filenames)
-    [[ "${OPTIONS[no_mtime]}" == "yes" ]] && cmd+=(--no-mtime)
+    [[ "${OPTIONS[preserve_mtime]}" == "yes" ]] && cmd+=(--mtime)
 
     # Output Template
     if [[ "${OPTIONS[use_playlist_template]}" == "yes" ]]; then
@@ -929,13 +930,28 @@ execute_ytdlp() {
 # MAIN
 # ==============================================================================
 
+print_help() {
+    printf "Usage: ./download.sh [OPTIONS] [URL...]\n\n"
+    printf "  -q, --quick    Quick mode: use defaults and skip all menus. Never blocks\n"
+    printf "                 on a prompt, so it's safe for cron/unattended use.\n"
+    printf "  --live         Modifier: record from the actual start of a live stream\n"
+    printf "                 (--live-from-start), instead of joining midway. Combine\n"
+    printf "                 with --quick for a fully automated one-liner, e.g.:\n"
+    printf "                   ./download.sh --quick --live URL\n"
+    printf "  -h, --help     Show this help message\n"
+    printf "\n"
+    printf "yt-dlp-portable %s (last updated %s)\n" "$VERSION" "$LAST_UPDATED"
+    printf "Note: the config file and the download-archive file are created in the\n"
+    printf "CURRENT directory, not next to this script. cd into wherever you want\n"
+    printf "your downloads and archive organized before running it.\n"
+}
+
 main() {
     # 1. Load/Init Config
     load_config
     init_defaults
 
     # 2. Parse Args
-    local QUICK_MODE=false
     local LIVE_MODE=false
     local code=0
 
@@ -950,14 +966,13 @@ main() {
                 shift
                 ;;
             --help|-h)
-                printf "Usage: ./download.sh [OPTIONS] [URL...]\n\n"
-                printf "  -q, --quick    Quick mode: use defaults and skip all menus\n"
-                printf "  --live         Modifier: record from the actual start of a live stream\n"
-                printf "                 (--live-from-start), instead of joining midway. Combine\n"
-                printf "                 with --quick for a fully automated one-liner, e.g.:\n"
-                printf "                   ./download.sh --quick --live URL\n"
-                printf "  -h, --help     Show this help message\n"
+                print_help
                 exit 0
+                ;;
+            -*)
+                _error "Unknown option: $1"
+                _error "Run with --help for usage."
+                exit 1
                 ;;
             *)
                 URL_LIST+=("$1")
@@ -994,10 +1009,15 @@ main() {
     if (( code != 0 )); then
         printf "\n"
         printf "%b[ERROR] yt-dlp finished with error code: %s%b\n" "${RED}" "$code" "${NC}"
+        # These map to yt-dlp's actual exit semantics (verified against its
+        # source): 1 covers the vast majority of real failures, 2 is either a
+        # CLI argument-parsing error or an unexpected internal exception, and
+        # 101 means it stopped on purpose rather than failing.
         case "$code" in
-            1)   printf "%b↳ Possible causes: Invalid URL, network error, or unsupported format.%b\n" "${YELLOW}" "${NC}" ;;
-            2)   printf "%b↳ Possible causes: Missing dependencies or invalid configuration flags.%b\n" "${YELLOW}" "${NC}" ;;
-            130) printf "%b↳ Process interrupted cleanly by user via Ctrl+C.%b\n" "${YELLOW}" "${NC}" ;;
+            1)   printf "%b↳ Download error: invalid URL, network issue, or an extractor problem. Enable Verbose mode for details.%b\n" "${YELLOW}" "${NC}" ;;
+            2)   printf "%b↳ Argument error, or an unexpected internal yt-dlp error. Enable Verbose mode for details.%b\n" "${YELLOW}" "${NC}" ;;
+            101) printf "%b↳ Stopped on purpose (hit --max-downloads or an existing archive entry), not necessarily a failure.%b\n" "${YELLOW}" "${NC}" ;;
+            130) printf "%b↳ Interrupted.%b\n" "${YELLOW}" "${NC}" ;;
             *)   printf "%b↳ Check the error logs from yt-dlp printed above.%b\n" "${YELLOW}" "${NC}" ;;
         esac
         exit "$code"
