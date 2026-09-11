@@ -90,3 +90,13 @@ press_enter() {
     printf "\n"
     read -rp "Press Enter to continue..."
 }
+
+# `clear` needs a usable TERM. Without one (docker exec without -t, some ssh
+# and cron setups) it exits non-zero, and under set -e that takes the whole
+# script down. Clearing is cosmetic, so it must never be fatal, and it is
+# skipped entirely when output is not a terminal so logs stay clean.
+clear_screen() {
+    if [[ -t 1 ]]; then
+        clear 2>/dev/null || printf '\033[H\033[2J'
+    fi
+}

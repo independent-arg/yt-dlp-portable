@@ -9,7 +9,12 @@
 set -euo pipefail
 shopt -s inherit_errexit
 
-LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# Follow symlinks before looking for lib.sh, otherwise a symlinked
+# download.sh looks for lib.sh next to the link instead of next to itself.
+# resolve_script_path() lives in lib.sh, so it can't be used for this.
+_self=$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null) || _self="${BASH_SOURCE[0]}"
+LIB_DIR="$(cd "$(dirname "$_self")" && pwd -P)"
+unset _self
 # shellcheck source=lib.sh
 source "${LIB_DIR}/lib.sh"
 
@@ -75,7 +80,7 @@ get_bin_dir() {
 }
 
 refresh_screen() {
-    clear
+    clear_screen
     show_banner
 }
 
@@ -229,6 +234,11 @@ manage_output_dir() {
         read -rp "Select an option [1-3]: " choice
         case "$choice" in
             1)  read -rp "Absolute path: " new_dir
+                # read does no tilde expansion, so "~/Videos" would otherwise
+                # create a directory literally named "~" in the current folder.
+                case "$new_dir" in
+                    \~|\~/*) new_dir="${HOME}${new_dir:1}" ;;
+                esac
                 if [[ -n "$new_dir" ]]; then
                     if [[ "$new_dir" != /* ]]; then
                         printf "\n%b[WARN] Path does not appear to be absolute. Using relative path.%b\n" "${YELLOW}" "${NC}"
@@ -291,20 +301,27 @@ configure_post_processing() {
                     2|3|4)
                         read -rp "Language (e.g., en, es, all) [Enter for all]: " sub_lang
                         OPTIONS[subtitles]="yes"
-                        OPTIONS[subtitles_lang]=$(tr -cd 'a-zA-Z0-9+,-' <<< "${sub_lang:-all}")
+                        # Keeps what yt-dlp's own syntax needs: "en.*" (regex)
+                        # and "all,-live_chat" (exclusion). The value is passed
+                        # as a literal argv, so none of this reaches a shell.
+                        OPTIONS[subtitles_lang]=$(tr -cd 'a-zA-Z0-9+,._*-' <<< "${sub_lang:-all}")
                         OPTIONS[write_subs]=$([[ "$choice" == "2" || "$choice" == "4" ]] && echo "yes" || echo "no")
                         OPTIONS[embed_subs]=$([[ "$choice" == "3" || "$choice" == "4" ]] && echo "yes" || echo "no")
                         printf "\n%bSubtitles configured.%b\n" "${GREEN}" "${NC}" ;;
                     *) printf "\n%bInvalid sub-option.%b\n" "${RED}" "${NC}" ;;
                 esac; sleep 1 ;;
             2)
-                printf "1) Embed as JPG (Recommended, forces MKV)\n2) Embed original\n3) Embed as PNG\n4) Don't embed\n\n"
+                # The thumbnail choice deliberately leaves the merge container
+                # alone. It used to clear it for everything but JPG, which let
+                # yt-dlp merge into webm, a container that can't hold a
+                # thumbnail at all, so "Embed original" and "PNG" failed.
+                printf "1) Embed as JPG (Recommended)\n2) Embed original\n3) Embed as PNG\n4) Don't embed\n\n"
                 read -rp "Select sub-option [1-4]: " choice
                 case "$choice" in
-                    1) OPTIONS[embed_thumbnail]="yes"; OPTIONS[convert_thumbnails]="jpg"; OPTIONS[merge_output_format]="mkv" ;;
-                    2) OPTIONS[embed_thumbnail]="yes"; OPTIONS[convert_thumbnails]=""; OPTIONS[merge_output_format]="" ;;
-                    3) OPTIONS[embed_thumbnail]="yes"; OPTIONS[convert_thumbnails]="png"; OPTIONS[merge_output_format]="" ;;
-                    4) OPTIONS[embed_thumbnail]="no"; OPTIONS[convert_thumbnails]=""; OPTIONS[merge_output_format]="" ;;
+                    1) OPTIONS[embed_thumbnail]="yes"; OPTIONS[convert_thumbnails]="jpg" ;;
+                    2) OPTIONS[embed_thumbnail]="yes"; OPTIONS[convert_thumbnails]="" ;;
+                    3) OPTIONS[embed_thumbnail]="yes"; OPTIONS[convert_thumbnails]="png" ;;
+                    4) OPTIONS[embed_thumbnail]="no"; OPTIONS[convert_thumbnails]="" ;;
                     *) printf "\n%bInvalid sub-option.%b\n" "${RED}" "${NC}"; sleep 1; continue ;;
                 esac
                 printf "\n%bThumbnail settings updated.%b\n" "${GREEN}" "${NC}"; sleep 1 ;;
@@ -341,9 +358,9 @@ configure_post_processing() {
 }
 
 # Validates a comma-separated SponsorBlock category list against the categories
-# yt-dlp actually accepts. In remove mode poi_highlight and chapter are not
-# available, so they are refused here with a clear message instead of letting
-# yt-dlp fail once the download is already underway.
+# yt-dlp actually accepts. yt-dlp would reject a bad list too, but only after
+# the whole menu has been filled in and START pressed, with a terse "wrong
+# CATS" error. In remove mode poi_highlight and chapter are not available.
 validate_sponsorblock_cats() {
     local raw="$1" mode="$2"
     local valid_all="sponsor intro outro selfpromo preview filler interaction music_offtopic hook poi_highlight chapter all default"
@@ -416,6 +433,63 @@ configure_sponsorblock() {
     sleep 1
 }
 
+# yt-dlp can only embed a thumbnail into these. Anything else is not a
+# warning but a hard postprocessing error that fails the whole download.
+container_holds_thumbnail() {
+    case "$1" in
+        mp3|mkv|mka|ogg|opus|flac|m4a|mp4|mov) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Decides what to do about the thumbnail given every other choice, so that
+# execute_ytdlp() and the summary always agree. Prints one of:
+#   ok            embed as usual (the final container is known to hold one)
+#   rewrap:RULE   embed, and hand RULE to --remux-video so a webm result gets
+#                 rewrapped (no re-encode) into a container that can hold it
+#   skip:EXT      the final file will be EXT, which can't hold a thumbnail
+thumbnail_plan() {
+    local target
+    if [[ "${OPTIONS[extract_audio]}" == "yes" ]]; then
+        # -x aac and -x alac both write .m4a and vorbis writes .ogg, all fine.
+        if [[ "${OPTIONS[audio_format]}" == "wav" ]]; then echo "skip:wav"; else echo "ok"; fi
+        return
+    fi
+
+    target="${OPTIONS[remux_video]}${OPTIONS[recode_video]}"
+    if [[ -n "$target" ]]; then
+        if container_holds_thumbnail "$target"; then echo "ok"; else echo "skip:$target"; fi
+        return
+    fi
+
+    # No container chosen. Merged downloads land in MKV already, but a single
+    # stream (audio only, video only, pre-merged, or the /best fallback) keeps
+    # whatever the site serves, and for YouTube that is usually webm.
+    case "${OPTIONS[format]}" in
+        bestaudio|bestaudio/*) echo "rewrap:webm>opus" ;;
+        *)                     echo "rewrap:webm>mkv" ;;
+    esac
+}
+
+# --embed-metadata on its own also embeds chapters: yt-dlp turns chapters on
+# whenever metadata or SponsorBlock marking is requested, unless explicitly
+# told not to. So "Basic metadata, no chapters" needs --no-embed-chapters to
+# mean what it says. SponsorBlock marks only reach the file as chapters, so
+# marking overrides that choice.
+chapters_wanted() {
+    [[ "${OPTIONS[embed_chapters]}" == "yes" || "${OPTIONS[sponsorblock_mode]}" == "mark" ]]
+}
+
+# Picking a video format while audio extraction is on would ask yt-dlp to pull
+# audio out of something that may have none ("Video only"), so choosing one
+# turns extraction off, the same way picking a container does.
+drop_audio_extraction() {
+    if [[ "${OPTIONS[extract_audio]}" == "yes" ]]; then
+        printf "%b[INFO] Audio extraction turned off, since a video format was chosen.%b\n" "${CYAN}" "${NC}"
+        OPTIONS[extract_audio]="no"; OPTIONS[audio_format]=""; OPTIONS[audio_quality]=""
+    fi
+}
+
 configure_format_and_audio() {
     local choice="" qual="" h="" remux="" cfmt="" fmt=""
 
@@ -444,18 +518,23 @@ configure_format_and_audio() {
                 printf "1) Best quality (Video+Audio)\n2) Best pre-merged (Faster)\n3) Video only\n4) Audio only (no convert)\n5) Specific resolution\n6) Custom format string\n\n"
                 read -rp "Select sub-option [1-6]: " choice
                 case "$choice" in
-                    1) OPTIONS[format]="bestvideo*+bestaudio/best"; OPTIONS[remux_video]=""; OPTIONS[recode_video]=""; OPTIONS[max_res_sort]="" ;;
-                    2) OPTIONS[format]="best"; OPTIONS[remux_video]=""; OPTIONS[recode_video]=""; OPTIONS[max_res_sort]="" ;;
-                    3) OPTIONS[format]="bestvideo"; OPTIONS[remux_video]=""; OPTIONS[recode_video]=""; OPTIONS[max_res_sort]="" ;;
-                    4) OPTIONS[format]="bestaudio"; OPTIONS[remux_video]=""; OPTIONS[recode_video]=""; OPTIONS[max_res_sort]="" ;;
+                    1) drop_audio_extraction; OPTIONS[format]="bestvideo*+bestaudio/best"; OPTIONS[remux_video]=""; OPTIONS[recode_video]=""; OPTIONS[max_res_sort]="" ;;
+                    2) drop_audio_extraction; OPTIONS[format]="best"; OPTIONS[remux_video]=""; OPTIONS[recode_video]=""; OPTIONS[max_res_sort]="" ;;
+                    3) drop_audio_extraction; OPTIONS[format]="bestvideo"; OPTIONS[remux_video]=""; OPTIONS[recode_video]=""; OPTIONS[max_res_sort]="" ;;
+                    # "no convert" is the whole point of this one, so it also
+                    # turns extraction off rather than quietly converting.
+                    4) drop_audio_extraction; OPTIONS[format]="bestaudio"; OPTIONS[remux_video]=""; OPTIONS[recode_video]=""; OPTIONS[max_res_sort]="" ;;
                     5)
                        read -rp "Select max resolution (e.g., 1080): " qual
                        h=$(tr -cd '0-9' <<< "$qual")
-                       if [[ -n "$h" ]]; then
+                       if [[ -n "$h" ]] && (( 10#$h > 0 )); then
+                           drop_audio_extraction
                            OPTIONS[format]="bestvideo*+bestaudio/best"
-                           OPTIONS[max_res_sort]="$h"
+                           OPTIONS[max_res_sort]="$((10#$h))"
                            OPTIONS[remux_video]=""
                            OPTIONS[recode_video]=""
+                       else
+                           printf "\n%b[ERROR] Enter a resolution such as 720 or 1080.%b\n" "${RED}" "${NC}"; sleep 2; continue
                        fi ;;
                     6) read -rp "Format (see yt-dlp docs): " cfmt
                        if [[ -n "$cfmt" ]]; then
@@ -497,7 +576,10 @@ configure_format_and_audio() {
                             OPTIONS[recode_video]="$remux"; OPTIONS[remux_video]=""
                             printf "\n%bRe-encode set to: %s%b\n" "${GREEN}" "$remux" "${NC}"
                         fi
-                        sleep 1 ;;
+                        if [[ "${OPTIONS[embed_thumbnail]}" == "yes" ]] && ! container_holds_thumbnail "$remux"; then
+                            printf "%b[INFO] A .%s file can't hold a thumbnail, so none will be embedded.%b\n" "${CYAN}" "$remux" "${NC}"
+                        fi
+                        sleep 2 ;;
                     *) printf "\n%bInvalid sub-option.%b\n" "${RED}" "${NC}"; sleep 1 ;;
                 esac ;;
             3)
@@ -527,8 +609,17 @@ configure_format_and_audio() {
                     OPTIONS[remux_video]=""; OPTIONS[recode_video]=""
                     if [[ "$fmt" != "flac" && "$fmt" != "wav" && "$fmt" != "alac" ]]; then
                         read -rp "Quality [0=best, 5=default, 10=worst]: " qual
-                        OPTIONS[audio_quality]=$(tr -cd '0-9' <<< "${qual:-5}")
+                        qual="${qual:-5}"
+                        if [[ "$qual" =~ ^[0-9]{1,2}$ ]] && (( 10#$qual <= 10 )); then
+                            OPTIONS[audio_quality]="$((10#$qual))"
+                        else
+                            printf "%b[INFO] Quality must be 0 to 10, using the default of 5.%b\n" "${CYAN}" "${NC}"
+                            OPTIONS[audio_quality]="5"
+                        fi
                     else OPTIONS[audio_quality]="0"; fi
+                    if [[ "$fmt" == "wav" && "${OPTIONS[embed_thumbnail]}" == "yes" ]]; then
+                        printf "%b[INFO] WAV files can't hold a thumbnail, so none will be embedded.%b\n" "${CYAN}" "${NC}"
+                    fi
                     printf "\n%bAudio extraction configured.%b\n" "${GREEN}" "${NC}"
                 fi; sleep 1 ;;
             4) return ;;
@@ -632,10 +723,25 @@ configure_advanced_settings() {
             2) OPTIONS[restrict_filenames]=$([[ "${OPTIONS[restrict_filenames]}" == "yes" ]] && echo "no" || echo "yes") ;;
             3) OPTIONS[preserve_mtime]=$([[ "${OPTIONS[preserve_mtime]}" == "yes" ]] && echo "no" || echo "yes") ;;
             4) OPTIONS[ignore_errors]=$([[ "${OPTIONS[ignore_errors]}" == "yes" ]] && echo "no" || echo "yes") ;;
-            5)  read -rp "Fragments [1-10]: " f
-                [[ "$f" =~ ^[0-9]+$ ]] && OPTIONS[concurrent_fragments]="$f" ;;
-            6)  read -rp "Seconds: " s
-                [[ "$s" =~ ^[0-9.]+$ ]] && OPTIONS[sleep_requests]="$s" ;;
+            # yt-dlp refuses 0 fragments and anything that isn't a plain
+            # number of seconds, but only once the download starts, so bad
+            # values are caught here. An empty answer keeps the current value.
+            5)  read -rp "Fragments (1 or more) [Enter to keep ${OPTIONS[concurrent_fragments]}]: " f
+                if [[ -z "$f" ]]; then
+                    :
+                elif [[ "$f" =~ ^[0-9]{1,3}$ ]] && (( 10#$f >= 1 )); then
+                    OPTIONS[concurrent_fragments]="$((10#$f))"
+                else
+                    _error "Use a whole number of 1 or more."; sleep 2
+                fi ;;
+            6)  read -rp "Seconds, e.g. 1.5 or 0 to disable [Enter to keep ${OPTIONS[sleep_requests]}]: " s
+                if [[ -z "$s" ]]; then
+                    :
+                elif [[ "$s" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+                    OPTIONS[sleep_requests]="$s"
+                else
+                    _error "Use a number such as 0, 2 or 1.5."; sleep 2
+                fi ;;
             7)  read -rp "Max speed, e.g. 500K or 4.2M [Enter for unlimited]: " rate
                 rate="${rate^^}"
                 if [[ -z "$rate" ]]; then
@@ -727,6 +833,9 @@ view_config() {
 
     elif [[ "${OPTIONS[format]}" == "bestaudio" ]]; then
         printf "Downloading %baudio only%b (no conversion)\n" "${YELLOW}" "${NC}"
+        if [[ "${OPTIONS[embed_thumbnail]}" == "yes" && "$(thumbnail_plan)" == "rewrap:webm>opus" ]]; then
+            printf "  %b↳ webm audio is rewrapped as .opus so the thumbnail fits (no re-encoding)%b\n" "${CYAN}" "${NC}"
+        fi
     elif [[ "${OPTIONS[format]}" == "bestvideo" ]]; then
          printf "Downloading %bvideo only%b (no audio)\n" "${YELLOW}" "${NC}"
     else
@@ -745,33 +854,34 @@ view_config() {
             printf "  %b↳ Remuxing container to: %s%b\n" "${CYAN}" "${OPTIONS[remux_video]^^}" "${NC}"
         elif [[ -n "${OPTIONS[recode_video]}" ]]; then
             printf "  %b↳ Re-encoding to: %s (slow)%b\n" "${CYAN}" "${OPTIONS[recode_video]^^}" "${NC}"
-        elif [[ "${OPTIONS[merge_output_format]}" == "mkv" ]]; then
+        elif [[ "${OPTIONS[merge_output_format]}" == "mkv" && "${OPTIONS[format]}" != "best" ]]; then
+             # "best" is a single pre-merged file, so there is nothing to merge.
              printf "  %b↳ Merging into MKV container%b\n" "${CYAN}" "${NC}"
         fi
     fi
 
-    # 2. Visuals (Thumbnail)
+    # 2. Visuals (Thumbnail). Uses the same plan as execute_ytdlp(), so the
+    # summary never promises a thumbnail that won't actually be embedded.
     printf "%b• Visuals:%b " "${GREEN}" "${NC}"
-    if [[ "${OPTIONS[embed_thumbnail]}" == "yes" ]]; then
-        if [[ "${OPTIONS[convert_thumbnails]}" == "jpg" ]]; then
-            printf "Embedding thumbnail (Converted to JPG)\n"
-        elif [[ "${OPTIONS[convert_thumbnails]}" == "png" ]]; then
-             printf "Embedding thumbnail (Converted to PNG)\n"
-        else
-            printf "Embedding original thumbnail\n"
-        fi
-    else
+    local plan=""
+    [[ "${OPTIONS[embed_thumbnail]}" == "yes" ]] && plan=$(thumbnail_plan)
+    if [[ "${OPTIONS[embed_thumbnail]}" != "yes" ]]; then
         printf "No thumbnail\n"
+    elif [[ "$plan" == skip:* ]]; then
+        printf "No thumbnail (a .%s file can't hold one)\n" "${plan#skip:}"
+    elif [[ "${OPTIONS[convert_thumbnails]}" == "jpg" ]]; then
+        printf "Embedding thumbnail (Converted to JPG)\n"
+    elif [[ "${OPTIONS[convert_thumbnails]}" == "png" ]]; then
+        printf "Embedding thumbnail (Converted to PNG)\n"
+    else
+        printf "Embedding original thumbnail\n"
     fi
 
     # 3. Metadata & Subtitles
     printf "%b• Data:%b    " "${GREEN}" "${NC}"
 
-    if [[ "${OPTIONS[embed_metadata]}" == "yes" ]]; then
-        meta_parts+=("Metadata (Includes Chapters)")
-    elif [[ "${OPTIONS[embed_chapters]}" == "yes" ]]; then
-        meta_parts+=("Chapters Only")
-    fi
+    [[ "${OPTIONS[embed_metadata]}" == "yes" ]] && meta_parts+=("Metadata")
+    chapters_wanted && meta_parts+=("Chapters")
     [[ "${OPTIONS[embed_info_json]}" == "yes" ]] && meta_parts+=("JSON Info")
 
     if [ ${#meta_parts[@]} -eq 0 ]; then
@@ -834,12 +944,12 @@ view_config() {
     if [[ "${OPTIONS[use_archive]}" == "yes" ]]; then
         printf "            %bTracking history in: %s%b\n" "${CYAN}" "${OPTIONS[archive_file]}" "${NC}"
         [[ "${OPTIONS[break_on_existing]}" == "yes" ]] && arch_opts+=("Stop on existing")
-        [[ -n "${OPTIONS[max_downloads]}" ]] && arch_opts+=("Limit: ${OPTIONS[max_downloads]}")
-
-        if [ ${#arch_opts[@]} -gt 0 ]; then
-             arch_str=$(_join_array arch_opts ", ")
-             printf "            %b↳ %s%b\n" "${YELLOW}" "$arch_str" "${NC}"
-        fi
+    fi
+    # The download limit works with or without the archive.
+    [[ -n "${OPTIONS[max_downloads]}" ]] && arch_opts+=("Stop after ${OPTIONS[max_downloads]} new download(s)")
+    if [ ${#arch_opts[@]} -gt 0 ]; then
+         arch_str=$(_join_array arch_opts ", ")
+         printf "            %b↳ %s%b\n" "${YELLOW}" "$arch_str" "${NC}"
     fi
 
     # 6. Advanced
@@ -1012,13 +1122,22 @@ execute_ytdlp() {
     if [[ "${OPTIONS[use_archive]}" == "yes" ]]; then
         cmd+=(--download-archive "${OPTIONS[archive_file]}")
         [[ "${OPTIONS[break_on_existing]}" == "yes" ]] && cmd+=(--break-on-existing)
-        [[ -n "${OPTIONS[max_downloads]}" ]] && cmd+=(--max-downloads "${OPTIONS[max_downloads]}")
     fi
+    # The download limit is independent of the archive. It used to live inside
+    # the block above, so setting it without the archive silently did nothing.
+    [[ -n "${OPTIONS[max_downloads]}" ]] && cmd+=(--max-downloads "${OPTIONS[max_downloads]}")
 
-    # Thumbnails
+    # Thumbnails. See thumbnail_plan(): embedding into a container that can't
+    # hold one fails the whole download, so it is skipped, or a webm result is
+    # rewrapped without re-encoding into a container that can.
+    local plan=""
     if [[ "${OPTIONS[embed_thumbnail]}" == "yes" ]]; then
-        cmd+=(--embed-thumbnail)
-        [[ -n "${OPTIONS[convert_thumbnails]}" ]] && cmd+=(--convert-thumbnails "${OPTIONS[convert_thumbnails]}")
+        plan=$(thumbnail_plan)
+        if [[ "$plan" != skip:* ]]; then
+            cmd+=(--embed-thumbnail)
+            [[ -n "${OPTIONS[convert_thumbnails]}" ]] && cmd+=(--convert-thumbnails "${OPTIONS[convert_thumbnails]}")
+            [[ "$plan" == rewrap:* ]] && cmd+=(--remux-video "${plan#rewrap:}")
+        fi
     fi
 
     # Only worth asking for a merge container when nothing downstream is going
@@ -1027,8 +1146,7 @@ execute_ytdlp() {
         cmd+=(--merge-output-format "${OPTIONS[merge_output_format]}")
     fi
 
-    # SponsorBlock. yt-dlp enables chapter embedding on its own when marking,
-    # so there is deliberately nothing extra passed here for that.
+    # SponsorBlock
     case "${OPTIONS[sponsorblock_mode]}" in
         mark)
             cmd+=(--sponsorblock-mark "${OPTIONS[sponsorblock_cats]}")
@@ -1039,11 +1157,12 @@ execute_ytdlp() {
             ;;
     esac
 
-    # Metadata
-    if [[ "${OPTIONS[embed_metadata]}" == "yes" ]]; then
-        cmd+=(--embed-metadata)
-    elif [[ "${OPTIONS[embed_chapters]}" == "yes" ]]; then
+    # Metadata and chapters, stated explicitly (see chapters_wanted()).
+    [[ "${OPTIONS[embed_metadata]}" == "yes" ]] && cmd+=(--embed-metadata)
+    if chapters_wanted; then
         cmd+=(--embed-chapters)
+    elif [[ "${OPTIONS[embed_metadata]}" == "yes" ]]; then
+        cmd+=(--no-embed-chapters)
     fi
     [[ "${OPTIONS[embed_info_json]}" == "yes" ]] && cmd+=(--embed-info-json)
 
@@ -1081,20 +1200,14 @@ execute_ytdlp() {
         cmd+=(--output "${OPTIONS[output_template]}")
     fi
 
-    # URLs
-    cmd+=("${URL_LIST[@]}")
+    # URLs. "--" ends option parsing, so an entry starting with "-" (some
+    # YouTube video IDs do) is always treated as a URL, never as a flag.
+    cmd+=(-- "${URL_LIST[@]}")
 
-    # Execute
+    # Execute. The outcome is reported once, by main().
     printf "%b[INFO] Starting yt-dlp execution engine...%b\n\n" "${CYAN}" "${NC}"
     "${cmd[@]}" || exit_code=$?
-
-    if (( exit_code != 0 )); then
-        printf "\n%b[WARN] yt-dlp finished with exit code %d (some downloads may have failed).%b\n" "${YELLOW}" "$exit_code" "${NC}"
-        return "$exit_code"
-    else
-        printf "\n%b[SUCCESS] All downloads completed successfully.%b\n" "${GREEN}" "${NC}"
-        return 0
-    fi
+    return "$exit_code"
 }
 
 # ==============================================================================
@@ -1110,6 +1223,8 @@ print_help() {
     printf "                 with --quick for a fully automated one-liner, e.g.:\n"
     printf "                   ./download.sh --quick --live URL\n"
     printf "  -h, --help     Show this help message\n"
+    printf "  --             Treat everything after it as a URL or video ID, even\n"
+    printf "                 one that starts with \"-\"\n"
     printf "\n"
     printf "yt-dlp-portable %s (last updated %s)\n" "$VERSION" "$LAST_UPDATED"
     printf "Note: the config file and the download-archive file are created in the\n"
@@ -1139,6 +1254,13 @@ main() {
             --help|-h)
                 print_help
                 exit 0
+                ;;
+            --)
+                # Everything after "--" is a URL or video ID, even if it
+                # starts with "-" (some YouTube IDs do).
+                shift
+                URL_LIST+=("$@")
+                break
                 ;;
             -*)
                 _error "Unknown option: $1"
@@ -1177,24 +1299,37 @@ main() {
     # 5. Execute
     printf "\n"
     execute_ytdlp || code=$?
-    if (( code != 0 )); then
-        printf "\n"
-        printf "%b[ERROR] yt-dlp finished with error code: %s%b\n" "${RED}" "$code" "${NC}"
-        # These map to yt-dlp's actual exit semantics (verified against its
-        # source): 1 covers the vast majority of real failures, 2 is either a
-        # CLI argument-parsing error or an unexpected internal exception, and
-        # 101 means it stopped on purpose rather than failing.
-        case "$code" in
-            1)   printf "%b↳ Download error: invalid URL, network issue, or an extractor problem. Enable Verbose mode for details.%b\n" "${YELLOW}" "${NC}" ;;
-            2)   printf "%b↳ Argument error, or an unexpected internal yt-dlp error. Enable Verbose mode for details.%b\n" "${YELLOW}" "${NC}" ;;
-            101) printf "%b↳ Stopped on purpose (hit --max-downloads or an existing archive entry), not necessarily a failure.%b\n" "${YELLOW}" "${NC}" ;;
-            130) printf "%b↳ Interrupted.%b\n" "${YELLOW}" "${NC}" ;;
-            *)   printf "%b↳ Check the error logs from yt-dlp printed above.%b\n" "${YELLOW}" "${NC}" ;;
-        esac
-        exit "$code"
-    fi
 
-    printf "%b[SUCCESS] Core execution process finished successfully.%b\n" "${GREEN}" "${NC}"
+    # These map to yt-dlp's actual exit semantics (verified against its
+    # source and by running it): 1 covers the vast majority of real failures,
+    # 2 is a CLI argument error or an unexpected internal exception, and 101
+    # is DownloadCancelled, i.e. the download limit or --break-on-existing was
+    # reached. 101 is what the user asked for, so it is reported and exits as
+    # a success; otherwise cron would flag every run that hit the limit.
+    case "$code" in
+        0)
+            printf "\n%b[SUCCESS] All downloads completed successfully.%b\n" "${GREEN}" "${NC}"
+            ;;
+        101)
+            printf "\n%b[SUCCESS] Stopped as configured: reached the download limit or an already archived video.%b\n" "${GREEN}" "${NC}"
+            exit 0
+            ;;
+        *)
+            printf "\n%b[ERROR] yt-dlp finished with error code: %s%b\n" "${RED}" "$code" "${NC}"
+            case "$code" in
+                1)   printf "%b↳ Download error: invalid URL, network issue, or an extractor problem. Enable Verbose mode for details.%b\n" "${YELLOW}" "${NC}"
+                     # An unreachable SponsorBlock API fails the whole download
+                     # in yt-dlp rather than just skipping the segments.
+                     if [[ "${OPTIONS[sponsorblock_mode]}" != "off" ]]; then
+                         printf "%b↳ SponsorBlock is on: if its server is unreachable, yt-dlp aborts the download. Try again with it off.%b\n" "${YELLOW}" "${NC}"
+                     fi ;;
+                2)   printf "%b↳ Argument error, or an unexpected internal yt-dlp error. Enable Verbose mode for details.%b\n" "${YELLOW}" "${NC}" ;;
+                130) printf "%b↳ Interrupted.%b\n" "${YELLOW}" "${NC}" ;;
+                *)   printf "%b↳ Check the error logs from yt-dlp printed above.%b\n" "${YELLOW}" "${NC}" ;;
+            esac
+            exit "$code"
+            ;;
+    esac
 }
 
 

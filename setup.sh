@@ -12,7 +12,12 @@
 set -euo pipefail
 shopt -s inherit_errexit
 
-LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# Follow symlinks before looking for lib.sh, otherwise a symlinked setup.sh
+# looks for lib.sh next to the link instead of next to itself.
+# resolve_script_path() lives in lib.sh, so it can't be used for this.
+_self=$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null) || _self="${BASH_SOURCE[0]}"
+LIB_DIR="$(cd "$(dirname "$_self")" && pwd -P)"
+unset _self
 # shellcheck source=lib.sh
 source "${LIB_DIR}/lib.sh"
 
@@ -417,7 +422,7 @@ print_component_status() {
 
 show_status_and_menu() {
     while true; do
-        clear
+        clear_screen
         show_banner
 
         local ytdlp_version ffmpeg_version deno_version
@@ -448,12 +453,15 @@ show_status_and_menu() {
         local install_missing_option=0 check_updates_option=0 update_option=0 reinstall_option=0 exit_option=0
         local has_missing=false has_installed=false has_updates=false has_unchecked=false
 
+        # A failed check ("error", usually no network) counts as unchecked so
+        # the user can simply retry, instead of being left with only the
+        # 470 MB "Force reinstall ALL" option until setup is restarted.
         local display
         for display in "$ytdlp_display" "$ffmpeg_display" "$deno_display"; do
             case "$display" in
-                missing|broken) has_missing=true ;;
-                outdated)       has_updates=true ;;
-                unchecked)      has_unchecked=true ;;
+                missing|broken)  has_missing=true ;;
+                outdated)        has_updates=true ;;
+                unchecked|error) has_unchecked=true ;;
             esac
         done
 
@@ -493,11 +501,14 @@ show_status_and_menu() {
         read -rp "Select option [1-$exit_option]: " choice
         printf "\n"
 
-        if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > exit_option )); then
+        if ! [[ "$choice" =~ ^[0-9]{1,4}$ ]] || (( 10#$choice < 1 || 10#$choice > exit_option )); then
             _error "Invalid option: please enter a number between 1 and $exit_option"
             sleep 2
             continue
         fi
+        # Normalise "08" to "8": bash would otherwise read a leading zero as
+        # octal, and the comparisons below are plain string matches.
+        choice=$((10#$choice))
 
         if [[ "$install_missing_option" != "0" && "$choice" == "$install_missing_option" ]]; then
             if [[ "$ytdlp_display" == "missing" || "$ytdlp_display" == "broken" ]]; then
@@ -520,9 +531,9 @@ show_status_and_menu() {
 
         elif [[ "$check_updates_option" != "0" && "$choice" == "$check_updates_option" ]]; then
             _info "Checking for updates... (requires internet)"
-            [[ "$ytdlp_display" == "unchecked" ]] && YTDLP_UPDATE_STATUS=$(check_ytdlp_update)
-            [[ "$ffmpeg_display" == "unchecked" ]] && FFMPEG_UPDATE_STATUS=$(check_ffmpeg_update)
-            [[ "$deno_display" == "unchecked" ]] && DENO_UPDATE_STATUS=$(check_deno_update)
+            [[ "$ytdlp_display" == "unchecked" || "$ytdlp_display" == "error" ]] && YTDLP_UPDATE_STATUS=$(check_ytdlp_update)
+            [[ "$ffmpeg_display" == "unchecked" || "$ffmpeg_display" == "error" ]] && FFMPEG_UPDATE_STATUS=$(check_ffmpeg_update)
+            [[ "$deno_display" == "unchecked" || "$deno_display" == "error" ]] && DENO_UPDATE_STATUS=$(check_deno_update)
 
         elif [[ "$update_option" != "0" && "$choice" == "$update_option" ]]; then
             # Only touch what is actually out of date.
@@ -611,7 +622,12 @@ main() {
         _error "Failed to create temporary directory"
         exit 1
     fi
-    trap 'rm -rf "${TEMP_DIR:?}" || true' EXIT INT TERM
+    # Cleanup lives on EXIT only. INT and TERM must actually exit: a handler
+    # that just cleans up lets the interrupted script finish with status 0,
+    # so Ctrl+C in the middle of an install looked like a success.
+    trap 'rm -rf "${TEMP_DIR:?}" 2>/dev/null || true' EXIT
+    trap 'printf "\n"; _warn "Interrupted. Components not reported as installed were left as they were."; exit 130' INT
+    trap 'exit 143' TERM
 
     SCRIPT_PATH=$(resolve_script_path)
     BASEDIR=$(dirname "$SCRIPT_PATH")
