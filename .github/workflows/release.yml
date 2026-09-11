@@ -34,17 +34,17 @@ jobs:
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Verify script VERSION matches the tag
+      - name: Verify lib.sh VERSION matches the tag
         run: |
           TAG="${{ steps.vars.outputs.tag }}"
-          SCRIPT_VERSION=$(grep -oP 'readonly VERSION="\K[^"]+' download.sh)
+          SCRIPT_VERSION=$(grep -oP 'readonly VERSION="\K[^"]+' lib.sh)
           if [[ "$TAG" != "$SCRIPT_VERSION" ]]; then
-            echo "::error::Tag ($TAG) does not match VERSION in download.sh ($SCRIPT_VERSION)"
+            echo "::error::Tag ($TAG) does not match VERSION in lib.sh ($SCRIPT_VERSION)"
             exit 1
           fi
 
       - name: Make scripts executable
-        run: chmod +x download.sh setup.sh
+        run: chmod +x download.sh setup.sh lib.sh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -55,3 +55,4 @@ jobs:
           files: |
             download.sh
             setup.sh
+            lib.sh
