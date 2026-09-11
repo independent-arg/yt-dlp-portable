@@ -12,7 +12,12 @@
 set -euo pipefail
 shopt -s inherit_errexit
 
-LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# Follow symlinks before looking for lib.sh, otherwise a symlinked setup.sh
+# looks for lib.sh next to the link instead of next to itself.
+# resolve_script_path() lives in lib.sh, so it can't be used for this.
+_self=$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null) || _self="${BASH_SOURCE[0]}"
+LIB_DIR="$(cd "$(dirname "$_self")" && pwd -P)"
+unset _self
 # shellcheck source=lib.sh
 source "${LIB_DIR}/lib.sh"
 
@@ -169,6 +174,84 @@ component_state() {
     esac
 }
 
+# ==============================================================================
+# INSTALL STATE
+#
+# yt-dlp publishes the checksum of the binary itself, so its update check can
+# just hash the installed file. FFmpeg and Deno publish the checksum of the
+# archive they ship inside, and that archive is gone once extracted, so what
+# was installed gets recorded here and compared against the published checksum
+# later. The file lives in bin/.
+# ==============================================================================
+
+STATE_FILE=""
+
+read_state() {
+    local key="$1" line
+    [[ -f "$STATE_FILE" ]] || return 0
+    line=$(grep "^${key}=" "$STATE_FILE" | head -n 1) || :
+    printf '%s' "${line#"${key}="}"
+}
+
+write_state() {
+    local key="$1" value="$2"
+    local tmp="${STATE_FILE}.tmp"
+
+    if [[ -f "$STATE_FILE" ]]; then
+        grep -v "^${key}=" "$STATE_FILE" > "$tmp" 2>/dev/null || :
+    else
+        : > "$tmp"
+    fi
+    printf '%s=%s\n' "$key" "$value" >> "$tmp"
+    mv -f "$tmp" "$STATE_FILE"
+}
+
+# Shared by the FFmpeg and Deno checks: compares the checksum recorded at
+# install time against the one currently published upstream.
+check_archive_update() {
+    local binary="$1" state_key="$2" sums_url="$3" asset_pattern="$4"
+
+    if [[ ! -f "${BINDIR}/${binary}" ]]; then
+        echo "missing"
+        return
+    fi
+
+    local recorded
+    recorded=$(read_state "$state_key")
+    if [[ -z "$recorded" ]]; then
+        # Installed before this was tracked, or the state file was removed.
+        echo "unknown"
+        return
+    fi
+
+    local sums_file="${TEMP_DIR}/${state_key}_check"
+    if ! curl -fsSL "$sums_url" -o "$sums_file" 2>/dev/null; then
+        echo "error"
+        return
+    fi
+
+    local latest
+    latest=$(grep "$asset_pattern" "$sums_file" | head -n 1 | awk '{print $1}')
+    if [[ -z "$latest" ]]; then
+        echo "error"
+        return
+    fi
+
+    if [[ "${latest,,}" == "${recorded,,}" ]]; then
+        echo "current"
+    else
+        echo "outdated"
+    fi
+}
+
+check_ffmpeg_update() {
+    check_archive_update "ffmpeg" "ffmpeg_archive_sha256" "$FFMPEG_SUM_URL" "ffmpeg-master-latest-linux64-gpl.tar.xz"
+}
+
+check_deno_update() {
+    check_archive_update "deno" "deno_zip_sha256" "$DENO_SUM_URL" "deno-x86_64-unknown-linux-gnu.zip"
+}
+
 # Check if yt-dlp needs an update by comparing local hash with the remote one
 check_ytdlp_update() {
     if [[ ! -f "${BINDIR}/yt-dlp" ]]; then
@@ -271,6 +354,8 @@ install_ffmpeg() {
     mv -f "$ffprobe_found" "${BINDIR}/ffprobe"
     chmod +x "${BINDIR}/ffmpeg" "${BINDIR}/ffprobe"
 
+    write_state "ffmpeg_archive_sha256" "$expected_ff"
+
     rm -rf "${extract_dir:?}" "${archive_tmp:?}" "${sums_file:?}"
     _ok "FFmpeg installed successfully"
 }
@@ -306,6 +391,8 @@ install_deno() {
     fi
 
     chmod +x "${BINDIR}/deno"
+    write_state "deno_zip_sha256" "$expected_deno"
+
     rm -f "${zip_tmp:?}" "${sums_file:?}"
     _ok "Deno installed successfully"
 }
@@ -314,12 +401,28 @@ install_deno() {
 # STATUS DISPLAY AND MENU
 # ==============================================================================
 
-# Persists across loop iterations within one run of the menu.
+# Persist across loop iterations within one run of the menu.
 YTDLP_UPDATE_STATUS="unchecked"
+FFMPEG_UPDATE_STATUS="unchecked"
+DENO_UPDATE_STATUS="unchecked"
+
+print_component_status() {
+    local name="$1" version="$2" status="$3"
+
+    case "$status" in
+        current)   printf "%b✓%b %s: Version %s (up to date)\n" "${GREEN}" "${NC}" "$name" "$version" ;;
+        outdated)  printf "%b⚠%b %s: Version %s (update available)\n" "${YELLOW}" "${NC}" "$name" "$version" ;;
+        missing)   printf "%b✗%b %s: Not installed\n" "${RED}" "${NC}" "$name" ;;
+        broken)    printf "%b✗%b %s: Installed but not responding (try Force reinstall)\n" "${RED}" "${NC}" "$name" ;;
+        unchecked) printf "%b✓%b %s: Version %s (installed)\n" "${GREEN}" "${NC}" "$name" "$version" ;;
+        unknown)   printf "%b⚠%b %s: Version %s (installed before update tracking, reinstall to enable it)\n" "${YELLOW}" "${NC}" "$name" "$version" ;;
+        error)     printf "%b⚠%b %s: Version %s (update check failed)\n" "${YELLOW}" "${NC}" "$name" "$version" ;;
+    esac
+}
 
 show_status_and_menu() {
     while true; do
-        clear
+        clear_screen
         show_banner
 
         local ytdlp_version ffmpeg_version deno_version
@@ -332,53 +435,39 @@ show_status_and_menu() {
         ffmpeg_state=$(component_state "$ffmpeg_version")
         deno_state=$(component_state "$deno_version")
 
-        # For yt-dlp only, "ok" is further refined into current/outdated/unchecked
-        local ytdlp_status_display="$ytdlp_state"
-        [[ "$ytdlp_state" == "ok" ]] && ytdlp_status_display="$YTDLP_UPDATE_STATUS"
+        # A component that is present and runs gets refined further into
+        # current/outdated/unchecked by whatever the last update check said.
+        local ytdlp_display="$ytdlp_state" ffmpeg_display="$ffmpeg_state" deno_display="$deno_state"
+        [[ "$ytdlp_state" == "ok" ]] && ytdlp_display="$YTDLP_UPDATE_STATUS"
+        [[ "$ffmpeg_state" == "ok" ]] && ffmpeg_display="$FFMPEG_UPDATE_STATUS"
+        [[ "$deno_state" == "ok" ]] && deno_display="$DENO_UPDATE_STATUS"
 
         printf "\nComponent Status:\n----------------\n\n"
-
-        case "$ytdlp_status_display" in
-            "current")  printf "%b✓%b yt-dlp: Version %s (up to date)\n" "${GREEN}" "${NC}" "$ytdlp_version" ;;
-            "outdated") printf "%b⚠%b yt-dlp: Version %s (update available)\n" "${YELLOW}" "${NC}" "$ytdlp_version" ;;
-            "missing")  printf "%b✗%b yt-dlp: Not installed\n" "${RED}" "${NC}" ;;
-            "broken")   printf "%b✗%b yt-dlp: Installed but not responding (try Force reinstall)\n" "${RED}" "${NC}" ;;
-            "unchecked")printf "%b✓%b yt-dlp: Version %s (installed)\n" "${GREEN}" "${NC}" "$ytdlp_version" ;;
-            "error")    printf "%b⚠%b yt-dlp: Version %s (update check failed)\n" "${YELLOW}" "${NC}" "$ytdlp_version" ;;
-        esac
-
-        if [[ "$ffmpeg_state" == "missing" ]]; then
-            printf "%b✗%b FFmpeg: Not installed\n" "${RED}" "${NC}"
-        elif [[ "$ffmpeg_state" == "broken" ]]; then
-            printf "%b✗%b FFmpeg: Installed but not responding (try Force reinstall)\n" "${RED}" "${NC}"
-        else
-            printf "%b✓%b FFmpeg: Version %s (installed)\n" "${GREEN}" "${NC}" "$ffmpeg_version"
-        fi
-
-        if [[ "$deno_state" == "missing" ]]; then
-            printf "%b✗%b Deno: Not installed\n" "${RED}" "${NC}"
-        elif [[ "$deno_state" == "broken" ]]; then
-            printf "%b✗%b Deno: Installed but not responding (try Force reinstall)\n" "${RED}" "${NC}"
-        else
-            printf "%b✓%b Deno: Version %s (installed)\n" "${GREEN}" "${NC}" "$deno_version"
-        fi
+        print_component_status "yt-dlp" "$ytdlp_version" "$ytdlp_display"
+        print_component_status "FFmpeg" "$ffmpeg_version" "$ffmpeg_display"
+        print_component_status "Deno" "$deno_version" "$deno_display"
 
         printf "\nAvailable Actions:\n-----------------\n\n"
 
         local option_num=1
         local install_missing_option=0 check_updates_option=0 update_option=0 reinstall_option=0 exit_option=0
-        local has_missing=false has_installed=false has_updates=false
+        local has_missing=false has_installed=false has_updates=false has_unchecked=false
 
-        if [[ "$ytdlp_status_display" == "missing" || "$ytdlp_status_display" == "broken" ]] || \
-           [[ "$ffmpeg_state" != "ok" ]] || [[ "$deno_state" != "ok" ]]; then
-            has_missing=true
-        fi
+        # A failed check ("error", usually no network) counts as unchecked so
+        # the user can simply retry, instead of being left with only the
+        # 470 MB "Force reinstall ALL" option until setup is restarted.
+        local display
+        for display in "$ytdlp_display" "$ffmpeg_display" "$deno_display"; do
+            case "$display" in
+                missing|broken)  has_missing=true ;;
+                outdated)        has_updates=true ;;
+                unchecked|error) has_unchecked=true ;;
+            esac
+        done
 
         if [[ "$ytdlp_state" != "missing" ]] || [[ "$ffmpeg_state" != "missing" ]] || [[ "$deno_state" != "missing" ]]; then
             has_installed=true
         fi
-
-        [[ "$ytdlp_status_display" == "outdated" ]] && has_updates=true
 
         if [[ "$has_missing" == true ]]; then
             printf "%d) Install missing components\n" "$option_num"
@@ -386,14 +475,14 @@ show_status_and_menu() {
             option_num=$((option_num + 1))
         fi
 
-        if [[ "$ytdlp_status_display" == "unchecked" ]]; then
+        if [[ "$has_unchecked" == true ]]; then
             printf "%d) Check for updates\n" "$option_num"
             check_updates_option=$option_num
             option_num=$((option_num + 1))
         fi
 
         if [[ "$has_updates" == true ]]; then
-            printf "%d) Update yt-dlp to latest version\n" "$option_num"
+            printf "%d) Update outdated components\n" "$option_num"
             update_option=$option_num
             option_num=$((option_num + 1))
         fi
@@ -412,19 +501,28 @@ show_status_and_menu() {
         read -rp "Select option [1-$exit_option]: " choice
         printf "\n"
 
-        if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > exit_option )); then
+        if ! [[ "$choice" =~ ^[0-9]{1,4}$ ]] || (( 10#$choice < 1 || 10#$choice > exit_option )); then
             _error "Invalid option: please enter a number between 1 and $exit_option"
             sleep 2
             continue
         fi
+        # Normalise "08" to "8": bash would otherwise read a leading zero as
+        # octal, and the comparisons below are plain string matches.
+        choice=$((10#$choice))
 
         if [[ "$install_missing_option" != "0" && "$choice" == "$install_missing_option" ]]; then
-            if [[ "$ytdlp_status_display" == "missing" || "$ytdlp_status_display" == "broken" ]]; then
+            if [[ "$ytdlp_display" == "missing" || "$ytdlp_display" == "broken" ]]; then
                 install_ytdlp
                 YTDLP_UPDATE_STATUS="current"
             fi
-            [[ "$ffmpeg_state" != "ok" ]] && install_ffmpeg
-            [[ "$deno_state" != "ok" ]] && install_deno
+            if [[ "$ffmpeg_display" == "missing" || "$ffmpeg_display" == "broken" ]]; then
+                install_ffmpeg
+                FFMPEG_UPDATE_STATUS="current"
+            fi
+            if [[ "$deno_display" == "missing" || "$deno_display" == "broken" ]]; then
+                install_deno
+                DENO_UPDATE_STATUS="current"
+            fi
 
             printf "\n"
             _success "Installation completed"
@@ -432,12 +530,25 @@ show_status_and_menu() {
             press_enter
 
         elif [[ "$check_updates_option" != "0" && "$choice" == "$check_updates_option" ]]; then
-            _info "Checking yt-dlp for updates... (requires internet)"
-            YTDLP_UPDATE_STATUS=$(check_ytdlp_update)
+            _info "Checking for updates... (requires internet)"
+            [[ "$ytdlp_display" == "unchecked" || "$ytdlp_display" == "error" ]] && YTDLP_UPDATE_STATUS=$(check_ytdlp_update)
+            [[ "$ffmpeg_display" == "unchecked" || "$ffmpeg_display" == "error" ]] && FFMPEG_UPDATE_STATUS=$(check_ffmpeg_update)
+            [[ "$deno_display" == "unchecked" || "$deno_display" == "error" ]] && DENO_UPDATE_STATUS=$(check_deno_update)
 
         elif [[ "$update_option" != "0" && "$choice" == "$update_option" ]]; then
-            install_ytdlp
-            YTDLP_UPDATE_STATUS="current"
+            # Only touch what is actually out of date.
+            if [[ "$ytdlp_display" == "outdated" ]]; then
+                install_ytdlp
+                YTDLP_UPDATE_STATUS="current"
+            fi
+            if [[ "$ffmpeg_display" == "outdated" ]]; then
+                install_ffmpeg
+                FFMPEG_UPDATE_STATUS="current"
+            fi
+            if [[ "$deno_display" == "outdated" ]]; then
+                install_deno
+                DENO_UPDATE_STATUS="current"
+            fi
             printf "\n"
             _success "Update completed"
             press_enter
@@ -452,6 +563,8 @@ show_status_and_menu() {
                 install_ffmpeg
                 install_deno
                 YTDLP_UPDATE_STATUS="current"
+                FFMPEG_UPDATE_STATUS="current"
+                DENO_UPDATE_STATUS="current"
                 printf "\n"
                 _success "Full reinstallation completed"
                 _info "Binaries located in: ${BINDIR}"
@@ -509,11 +622,17 @@ main() {
         _error "Failed to create temporary directory"
         exit 1
     fi
-    trap 'rm -rf "${TEMP_DIR:?}" || true' EXIT INT TERM
+    # Cleanup lives on EXIT only. INT and TERM must actually exit: a handler
+    # that just cleans up lets the interrupted script finish with status 0,
+    # so Ctrl+C in the middle of an install looked like a success.
+    trap 'rm -rf "${TEMP_DIR:?}" 2>/dev/null || true' EXIT
+    trap 'printf "\n"; _warn "Interrupted. Components not reported as installed were left as they were."; exit 130' INT
+    trap 'exit 143' TERM
 
     SCRIPT_PATH=$(resolve_script_path)
     BASEDIR=$(dirname "$SCRIPT_PATH")
     BINDIR="${BASEDIR}/bin"
+    STATE_FILE="${BINDIR}/.install_state"
 
     if [[ ! -d "${BINDIR}" ]]; then
         if ! mkdir -p "${BINDIR}" 2>/dev/null; then

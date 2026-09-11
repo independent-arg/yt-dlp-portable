@@ -23,7 +23,7 @@ chmod +x setup.sh download.sh lib.sh
 
 ![setup.sh on a fresh clone](screenshots/setup.png)
 
-Run it again whenever you want to check for a newer yt-dlp. It nightly-tracks upstream, since that's the channel yt-dlp itself recommends for getting extractor fixes quickly.
+Run it again whenever you want to check for updates. It only re-downloads the components that are actually out of date, and yt-dlp comes from the nightly channel, since that's the one yt-dlp itself recommends for getting extractor fixes quickly.
 
 ## Downloading things
 
@@ -33,7 +33,7 @@ Works on YouTube, Twitch, and pretty much anywhere else yt-dlp does, which by no
 ./download.sh
 ```
 
-With no arguments it drops you into a menu. Add a URL, pick a format, decide if you want subtitles or a thumbnail embedded, and go:
+With no arguments it drops you into a menu. Add a URL, pick a format, decide if you want subtitles, a thumbnail embedded or the sponsor segments cut out, and go:
 
 ![download.sh's main menu](screenshots/main-menu.png)
 
@@ -54,10 +54,20 @@ If you already know what you want, skip the menu entirely:
 ./download.sh --quick --live "https://youtube.com/watch?v=some-livestream"
 ```
 
+## SponsorBlock
+
+Under Post-Processing you can have sponsor segments either marked as chapters, so you can skip them yourself, or cut straight out of the file. It uses the community database at [sponsor.ajay.app](https://sponsor.ajay.app), so it only does anything on YouTube.
+
+Cutting is the interesting one: it really does re-cut the file, so an 18 minute video with a minute of sponsor reads comes out a minute shorter. By default the cuts are made without re-encoding, which is fast but can leave a small glitch right at the seam. There is an option to force keyframes at the cuts instead, which looks cleaner but re-encodes the whole video and takes much longer.
+
+One caveat that comes from yt-dlp itself: if the SponsorBlock server can't be reached, the download fails instead of just skipping the segments. If that happens, turn SponsorBlock off and try again.
+
 ## A couple of things worth knowing
 
 - The output directory you pick, and the download-archive file that tracks what you've already grabbed, are remembered **per folder** (wherever you happen to run `download.sh` from). Keep separate download projects in separate folders and they won't step on each other.
-- Picking "remux to a container" and "extract audio" are mutually exclusive: turning one on turns the other off, since extracting audio throws away the video stream a remux would apply to.
+- Converting the container comes in two flavours. Remux just rewraps the existing streams, which is nearly instant but fails if the codecs don't fit the target container. Re-encode always works but is slow and costs some quality.
+- Audio extraction is turned off when you pick a container conversion or a video format, and the other way around, since extracting audio throws away the video those would apply to. The menu tells you when it does this.
+- Thumbnails only fit in some file types. WAV and webm can't hold one, so if you ask for either, the thumbnail is simply skipped. When nothing else decides the container, a webm download is rewrapped into `.mkv` (or `.opus` for audio) so the thumbnail fits. That rewrap doesn't re-encode anything.
 - Everything yt-dlp itself already defaults to sensibly, this wrapper leaves alone. The options here are the ones that are actually worth having an opinion about.
 
 ## When something goes wrong

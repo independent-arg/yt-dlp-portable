@@ -7,9 +7,9 @@
 # already done `set -euo pipefail`.
 # ==============================================================================
 
-readonly VERSION="v0.11.0"
+readonly VERSION="v0.12.0"
 # shellcheck disable=SC2034 # consumed by setup.sh/download.sh --help output
-readonly LAST_UPDATED="2026-09-10"
+readonly LAST_UPDATED="2026-09-11"
 
 # Colors are skipped when stdout isn't a terminal (piped to a file/log, or
 # NO_COLOR is set) so redirected output and cron logs don't fill up with
@@ -89,4 +89,14 @@ show_banner() {
 press_enter() {
     printf "\n"
     read -rp "Press Enter to continue..."
+}
+
+# `clear` needs a usable TERM. Without one (docker exec without -t, some ssh
+# and cron setups) it exits non-zero, and under set -e that takes the whole
+# script down. Clearing is cosmetic, so it must never be fatal, and it is
+# skipped entirely when output is not a terminal so logs stay clean.
+clear_screen() {
+    if [[ -t 1 ]]; then
+        clear 2>/dev/null || printf '\033[H\033[2J'
+    fi
 }

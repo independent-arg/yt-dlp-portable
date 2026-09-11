@@ -21,7 +21,69 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Nothing gets published unless the scripts parse, lint clean, and behave
+  # sanely when run. A broken release is much more annoying than a failed tag.
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check syntax
+        run: |
+          for f in lib.sh setup.sh download.sh; do
+            bash -n "$f"
+          done
+
+      - name: ShellCheck
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y shellcheck
+          fi
+          shellcheck --version
+          shellcheck lib.sh setup.sh download.sh
+
+      - name: Both scripts answer --help
+        run: |
+          bash setup.sh --help
+          bash download.sh --help
+
+      # lib.sh has to be found next to the real script, not next to the link.
+      # This broke once already when lib.sh was introduced.
+      - name: Both scripts work when run through a symlink
+        run: |
+          mkdir -p "$RUNNER_TEMP/elsewhere"
+          ln -s "$PWD/setup.sh" "$RUNNER_TEMP/elsewhere/setup.sh"
+          ln -s "$PWD/download.sh" "$RUNNER_TEMP/elsewhere/download.sh"
+          bash "$RUNNER_TEMP/elsewhere/setup.sh" --help
+          bash "$RUNNER_TEMP/elsewhere/download.sh" --help
+
+      - name: Unknown options are rejected
+        run: |
+          for script in setup.sh download.sh; do
+            if bash "$script" --not-a-real-option >/dev/null 2>&1; then
+              echo "::error::$script accepted an unknown option instead of failing"
+              exit 1
+            fi
+          done
+
+      # There is no bin/ in a fresh checkout, so this is the real behaviour a
+      # user gets when they skip setup.sh: fail, and say what to run.
+      - name: Missing binaries are reported, not ignored
+        run: |
+          if bash download.sh --quick "https://example.com/video" >/tmp/out.txt 2>&1; then
+            echo "::error::download.sh ran despite bin/ being absent"
+            exit 1
+          fi
+          grep -q "bash setup.sh" /tmp/out.txt || {
+            echo "::error::download.sh did not point the user at setup.sh"
+            cat /tmp/out.txt
+            exit 1
+          }
+
   release:
+    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
