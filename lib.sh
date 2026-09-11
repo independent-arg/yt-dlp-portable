@@ -7,9 +7,9 @@
 # already done `set -euo pipefail`.
 # ==============================================================================
 
-readonly VERSION="v0.11.0"
+readonly VERSION="v0.12.0"
 # shellcheck disable=SC2034 # consumed by setup.sh/download.sh --help output
-readonly LAST_UPDATED="2026-09-10"
+readonly LAST_UPDATED="2026-09-11"
 
 # Colors are skipped when stdout isn't a terminal (piped to a file/log, or
 # NO_COLOR is set) so redirected output and cron logs don't fill up with

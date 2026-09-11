@@ -33,7 +33,7 @@ Works on YouTube, Twitch, and pretty much anywhere else yt-dlp does, which by no
 ./download.sh
 ```
 
-With no arguments it drops you into a menu. Add a URL, pick a format, decide if you want subtitles or a thumbnail embedded, and go:
+With no arguments it drops you into a menu. Add a URL, pick a format, decide if you want subtitles, a thumbnail embedded or the sponsor segments cut out, and go:
 
 ![download.sh's main menu](screenshots/main-menu.png)
 
@@ -54,10 +54,17 @@ If you already know what you want, skip the menu entirely:
 ./download.sh --quick --live "https://youtube.com/watch?v=some-livestream"
 ```
 
+## SponsorBlock
+
+Under Post-Processing you can have sponsor segments either marked as chapters, so you can skip them yourself, or cut straight out of the file. It uses the community database at [sponsor.ajay.app](https://sponsor.ajay.app), so it only does anything on YouTube.
+
+Cutting is the interesting one: it really does re-cut the file, so a 18 minute video with two minutes of sponsor comes out two minutes shorter. By default the cuts are made without re-encoding, which is fast but can leave a small glitch right at the seam. There is an option to force keyframes at the cuts instead, which looks cleaner but re-encodes the whole video and takes much longer.
+
 ## A couple of things worth knowing
 
 - The output directory you pick, and the download-archive file that tracks what you've already grabbed, are remembered **per folder** (wherever you happen to run `download.sh` from). Keep separate download projects in separate folders and they won't step on each other.
-- Picking "remux to a container" and "extract audio" are mutually exclusive: turning one on turns the other off, since extracting audio throws away the video stream a remux would apply to.
+- Converting the container comes in two flavours. Remux just rewraps the existing streams, which is nearly instant but fails if the codecs don't fit the target container. Re-encode always works but is slow and costs some quality.
+- Container conversion and audio extraction are mutually exclusive: turning one on turns the other off, since extracting audio throws away the video stream the conversion would apply to.
 - Everything yt-dlp itself already defaults to sensibly, this wrapper leaves alone. The options here are the ones that are actually worth having an opinion about.
 
 ## When something goes wrong

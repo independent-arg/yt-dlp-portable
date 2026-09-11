@@ -98,7 +98,14 @@ init_defaults() {
     OPTIONS[embed_chapters]="no"
     OPTIONS[embed_info_json]="no"
     OPTIONS[remux_video]=""
+    OPTIONS[recode_video]=""
     OPTIONS[write_subs]="no"
+    # SponsorBlock (YouTube only). Mode is off | mark | remove.
+    # yt-dlp turns chapter embedding on by itself when marking, so there is
+    # nothing to coordinate with OPTIONS[embed_chapters] here.
+    OPTIONS[sponsorblock_mode]="off"
+    OPTIONS[sponsorblock_cats]=""
+    OPTIONS[sponsorblock_keyframes]="no"
     OPTIONS[output_template]="%(title)s [%(id)s].%(ext)s"
     OPTIONS[verbose]="yes"
     OPTIONS[restrict_filenames]="yes"
@@ -108,6 +115,7 @@ init_defaults() {
     OPTIONS[preserve_mtime]="no"
     OPTIONS[concurrent_fragments]="5"
     OPTIONS[sleep_requests]="1.5"
+    OPTIONS[limit_rate]=""
     OPTIONS[playlist_handling]="auto"
     OPTIONS[playlist_items]=""
     OPTIONS[playlist_reverse]="no"
@@ -264,9 +272,11 @@ configure_post_processing() {
         printf "1) Subtitles:         [%s] (Lang: %s)\n" "${OPTIONS[subtitles]}" "${OPTIONS[subtitles_lang]:-all}"
         printf "2) Embed Thumbnail:   [%s] (Format: %s)\n" "${OPTIONS[embed_thumbnail]}" "${OPTIONS[convert_thumbnails]:-original}"
         printf "3) Embed Metadata:    [%s] (Chapters: %s)\n" "${OPTIONS[embed_metadata]}" "${OPTIONS[embed_chapters]}"
-        printf "4) Back\n\n"
+        printf "4) SponsorBlock:      [%s]%s\n" "${OPTIONS[sponsorblock_mode]}" \
+            "$([[ "${OPTIONS[sponsorblock_mode]}" != "off" ]] && printf " (Categories: %s)" "${OPTIONS[sponsorblock_cats]}")"
+        printf "5) Back\n\n"
 
-        read -rp "Select an option [1-4]: " choice
+        read -rp "Select an option [1-5]: " choice
         printf "\n"
 
         case "$choice" in
@@ -309,10 +319,101 @@ configure_post_processing() {
                     *) printf "\n%bInvalid sub-option.%b\n" "${RED}" "${NC}"; sleep 1; continue ;;
                 esac
                 printf "\n%bMetadata settings updated.%b\n" "${GREEN}" "${NC}"; sleep 1 ;;
-            4) return ;;
+            4)
+                printf "SponsorBlock uses a crowd-sourced database of sponsor segments.\n"
+                printf "It only affects YouTube; on any other site it simply does nothing.\n\n"
+                printf "1) Off (default)\n2) Mark segments as chapters (nothing is cut)\n3) Cut segments out of the file\n\n"
+                read -rp "Select sub-option [1-3]: " choice
+                case "$choice" in
+                    1)
+                        OPTIONS[sponsorblock_mode]="off"
+                        OPTIONS[sponsorblock_cats]=""
+                        OPTIONS[sponsorblock_keyframes]="no"
+                        printf "\n%bSponsorBlock disabled.%b\n" "${GREEN}" "${NC}"; sleep 1 ;;
+                    2|3)
+                        configure_sponsorblock "$([[ "$choice" == "3" ]] && echo "remove" || echo "mark")" ;;
+                    *) printf "\n%bInvalid sub-option.%b\n" "${RED}" "${NC}"; sleep 1 ;;
+                esac ;;
+            5) return ;;
             *) printf "%bInvalid option.%b\n" "${RED}" "${NC}"; sleep 1 ;;
         esac
     done
+}
+
+# Validates a comma-separated SponsorBlock category list against the categories
+# yt-dlp actually accepts. In remove mode poi_highlight and chapter are not
+# available, so they are refused here with a clear message instead of letting
+# yt-dlp fail once the download is already underway.
+validate_sponsorblock_cats() {
+    local raw="$1" mode="$2"
+    local valid_all="sponsor intro outro selfpromo preview filler interaction music_offtopic hook poi_highlight chapter all default"
+    local cleaned cat bare
+    local -a parts=()
+
+    cleaned=$(tr -cd 'a-z_,-' <<< "${raw,,}")
+    if [[ -z "$cleaned" ]]; then
+        _error "Empty category list."
+        return 1
+    fi
+
+    IFS=',' read -ra parts <<< "$cleaned"
+    for cat in "${parts[@]}"; do
+        bare="${cat#-}"
+        if [[ -z "$bare" ]]; then
+            _error "Empty category in the list."
+            return 1
+        fi
+        if [[ " $valid_all " != *" $bare "* ]]; then
+            _error "Unknown SponsorBlock category: $bare"
+            return 1
+        fi
+        if [[ "$mode" == "remove" && ( "$bare" == "poi_highlight" || "$bare" == "chapter" ) ]]; then
+            _error "Category '$bare' can only be marked, not removed."
+            return 1
+        fi
+    done
+
+    printf '%s' "$cleaned"
+}
+
+configure_sponsorblock() {
+    local mode="$1"
+    local choice="" custom="" cleaned="" reply=""
+
+    printf "\n"
+    printf "1) Sponsors only (recommended)\n"
+    printf "2) Sponsors, self-promotion and interaction reminders\n"
+    printf "3) Everything SponsorBlock covers\n"
+    printf "4) Custom list\n\n"
+    read -rp "Select categories [1-4]: " choice
+
+    case "$choice" in
+        1) cleaned="sponsor" ;;
+        2) cleaned="sponsor,selfpromo,interaction" ;;
+        3) cleaned="default" ;;
+        4)
+            read -rp "Categories (e.g. sponsor,intro,outro): " custom
+            if ! cleaned=$(validate_sponsorblock_cats "$custom" "$mode"); then
+                sleep 2
+                return
+            fi ;;
+        *) printf "\n%bInvalid sub-option.%b\n" "${RED}" "${NC}"; sleep 1; return ;;
+    esac
+
+    OPTIONS[sponsorblock_mode]="$mode"
+    OPTIONS[sponsorblock_cats]="$cleaned"
+
+    if [[ "$mode" == "remove" ]]; then
+        printf "\n"
+        read -rp "Force keyframes at cuts? Cleaner cuts but re-encodes, much slower (y/N): " -n 1 reply
+        printf "\n"
+        OPTIONS[sponsorblock_keyframes]=$([[ "${reply,,}" == "y" ]] && echo "yes" || echo "no")
+    else
+        OPTIONS[sponsorblock_keyframes]="no"
+    fi
+
+    printf "\n%bSponsorBlock set to %s: %s%b\n" "${GREEN}" "$mode" "$cleaned" "${NC}"
+    sleep 1
 }
 
 configure_format_and_audio() {
@@ -326,7 +427,12 @@ configure_format_and_audio() {
         else
             printf "1) Video Format base:   [%s]\n" "${OPTIONS[format]}"
         fi
-        printf "2) Remux Container:     [%s]\n" "${OPTIONS[remux_video]:-none}"
+        if [[ -n "${OPTIONS[recode_video]}" ]]; then
+            printf "2) Container:           [%s] (re-encode)\n" "${OPTIONS[recode_video]}"
+        else
+            printf "2) Container:           [%s]%s\n" "${OPTIONS[remux_video]:-none}" \
+                "$([[ -n "${OPTIONS[remux_video]}" ]] && printf " (remux)")"
+        fi
         printf "3) Audio Extraction:    [%s] (Format: %s, Qual: %s)\n" "${OPTIONS[extract_audio]}" "${OPTIONS[audio_format]:-none}" "${OPTIONS[audio_quality]:-none}"
         printf "4) Back\n\n"
 
@@ -338,10 +444,10 @@ configure_format_and_audio() {
                 printf "1) Best quality (Video+Audio)\n2) Best pre-merged (Faster)\n3) Video only\n4) Audio only (no convert)\n5) Specific resolution\n6) Custom format string\n\n"
                 read -rp "Select sub-option [1-6]: " choice
                 case "$choice" in
-                    1) OPTIONS[format]="bestvideo*+bestaudio/best"; OPTIONS[remux_video]=""; OPTIONS[max_res_sort]="" ;;
-                    2) OPTIONS[format]="best"; OPTIONS[remux_video]=""; OPTIONS[max_res_sort]="" ;;
-                    3) OPTIONS[format]="bestvideo"; OPTIONS[remux_video]=""; OPTIONS[max_res_sort]="" ;;
-                    4) OPTIONS[format]="bestaudio"; OPTIONS[remux_video]=""; OPTIONS[max_res_sort]="" ;;
+                    1) OPTIONS[format]="bestvideo*+bestaudio/best"; OPTIONS[remux_video]=""; OPTIONS[recode_video]=""; OPTIONS[max_res_sort]="" ;;
+                    2) OPTIONS[format]="best"; OPTIONS[remux_video]=""; OPTIONS[recode_video]=""; OPTIONS[max_res_sort]="" ;;
+                    3) OPTIONS[format]="bestvideo"; OPTIONS[remux_video]=""; OPTIONS[recode_video]=""; OPTIONS[max_res_sort]="" ;;
+                    4) OPTIONS[format]="bestaudio"; OPTIONS[remux_video]=""; OPTIONS[recode_video]=""; OPTIONS[max_res_sort]="" ;;
                     5)
                        read -rp "Select max resolution (e.g., 1080): " qual
                        h=$(tr -cd '0-9' <<< "$qual")
@@ -349,6 +455,7 @@ configure_format_and_audio() {
                            OPTIONS[format]="bestvideo*+bestaudio/best"
                            OPTIONS[max_res_sort]="$h"
                            OPTIONS[remux_video]=""
+                           OPTIONS[recode_video]=""
                        fi ;;
                     6) read -rp "Format (see yt-dlp docs): " cfmt
                        if [[ -n "$cfmt" ]]; then
@@ -356,25 +463,43 @@ configure_format_and_audio() {
                            # literal argv to yt-dlp (never through a shell), so selector syntax like
                            # commas, spaces, '*', '.', '!' etc. must be preserved
                            OPTIONS[format]=$(tr -d '[:cntrl:]' <<< "$cfmt")
-                           OPTIONS[remux_video]=""; OPTIONS[max_res_sort]=""
+                           OPTIONS[remux_video]=""; OPTIONS[recode_video]=""; OPTIONS[max_res_sort]=""
                        fi ;;
                     *) printf "\n%bInvalid sub-option.%b\n" "${RED}" "${NC}"; sleep 1; continue ;;
                 esac
                 printf "\n%bFormat configuration updated.%b\n" "${GREEN}" "${NC}"; sleep 1 ;;
             2)
-                read -rp "Target container (mp4, mkv, etc): " remux
-                remux=$(tr -cd 'a-z0-9' <<< "$remux")
-                if [[ -n "$remux" ]]; then
-                    if [[ "${OPTIONS[extract_audio]}" == "yes" ]]; then
-                        printf "%b[INFO] Disabling audio extraction: remuxing applies to the video container.%b\n" "${CYAN}" "${NC}"
-                        OPTIONS[extract_audio]="no"; OPTIONS[audio_format]=""; OPTIONS[audio_quality]=""
-                        OPTIONS[format]="bestvideo*+bestaudio/best"
-                    fi
-                    OPTIONS[remux_video]="$remux"
-                    printf "\n%bRemux set to: %s%b\n" "${GREEN}" "$remux" "${NC}"
-                else
-                    printf "\n%b[ERROR] Invalid container format.%b\n" "${RED}" "${NC}"
-                fi; sleep 1 ;;
+                printf "1) Leave the container alone (default)\n"
+                printf "2) Remux (fast, keeps the codecs, fails if they don't fit the container)\n"
+                printf "3) Re-encode (slow, always works, loses some quality)\n\n"
+                read -rp "Select sub-option [1-3]: " choice
+                case "$choice" in
+                    1)
+                        OPTIONS[remux_video]=""; OPTIONS[recode_video]=""
+                        printf "\n%bContainer conversion disabled.%b\n" "${GREEN}" "${NC}"; sleep 1 ;;
+                    2|3)
+                        read -rp "Target container (mp4, mkv, etc): " remux
+                        remux=$(tr -cd 'a-z0-9' <<< "$remux")
+                        if [[ -z "$remux" ]]; then
+                            printf "\n%b[ERROR] Invalid container format.%b\n" "${RED}" "${NC}"; sleep 1; continue
+                        fi
+                        if [[ "${OPTIONS[extract_audio]}" == "yes" ]]; then
+                            printf "%b[INFO] Disabling audio extraction: this applies to the video container.%b\n" "${CYAN}" "${NC}"
+                            OPTIONS[extract_audio]="no"; OPTIONS[audio_format]=""; OPTIONS[audio_quality]=""
+                            OPTIONS[format]="bestvideo*+bestaudio/best"
+                        fi
+                        # Remux and re-encode are two ways of reaching the same
+                        # container, so only one of them can be set at a time.
+                        if [[ "$choice" == "2" ]]; then
+                            OPTIONS[remux_video]="$remux"; OPTIONS[recode_video]=""
+                            printf "\n%bRemux set to: %s%b\n" "${GREEN}" "$remux" "${NC}"
+                        else
+                            OPTIONS[recode_video]="$remux"; OPTIONS[remux_video]=""
+                            printf "\n%bRe-encode set to: %s%b\n" "${GREEN}" "$remux" "${NC}"
+                        fi
+                        sleep 1 ;;
+                    *) printf "\n%bInvalid sub-option.%b\n" "${RED}" "${NC}"; sleep 1 ;;
+                esac ;;
             3)
                 printf "1) Disable extraction\n2) MP3\n3) AAC\n4) OPUS\n5) FLAC\n6) M4A\n7) WAV\n8) ALAC\n9) VORBIS\n\n"
                 read -rp "Select sub-option [1-9]: " choice
@@ -392,12 +517,14 @@ configure_format_and_audio() {
                         6) fmt="m4a";; 7) fmt="wav";; 8) fmt="alac";; 9) fmt="vorbis";;
                         *) printf "\n%bInvalid sub-option.%b\n" "${RED}" "${NC}"; sleep 1; continue ;;
                     esac
-                    if [[ -n "${OPTIONS[remux_video]}" ]]; then
-                        printf "%b[INFO] Clearing remux container (%s): audio extraction discards the video stream.%b\n" "${CYAN}" "${OPTIONS[remux_video]}" "${NC}"
+                    if [[ -n "${OPTIONS[remux_video]}${OPTIONS[recode_video]}" ]]; then
+                        printf "%b[INFO] Clearing container conversion (%s): audio extraction discards the video stream.%b\n" \
+                            "${CYAN}" "${OPTIONS[remux_video]}${OPTIONS[recode_video]}" "${NC}"
                     fi
                     OPTIONS[extract_audio]="yes"; OPTIONS[audio_format]="$fmt"
                     # Avoid downloading and discarding a full video stream just to extract audio
-                    OPTIONS[format]="bestaudio/best"; OPTIONS[remux_video]=""; OPTIONS[max_res_sort]=""
+                    OPTIONS[format]="bestaudio/best"; OPTIONS[max_res_sort]=""
+                    OPTIONS[remux_video]=""; OPTIONS[recode_video]=""
                     if [[ "$fmt" != "flac" && "$fmt" != "wav" && "$fmt" != "alac" ]]; then
                         read -rp "Quality [0=best, 5=default, 10=worst]: " qual
                         OPTIONS[audio_quality]=$(tr -cd '0-9' <<< "${qual:-5}")
@@ -484,7 +611,7 @@ configure_automation_naming() {
 
 configure_advanced_settings() {
     while true; do
-        local choice="" f="" s=""
+        local choice="" f="" s="" rate=""
         refresh_screen
 
         printf "%b=== Advanced Engine Settings ===%b\n\n" "${YELLOW}" "${NC}"
@@ -494,9 +621,10 @@ configure_advanced_settings() {
         printf "4) Ignore errors (playlist):      [%s]\n" "$([[ "${OPTIONS[ignore_errors]}" == "yes" ]] && echo "Enabled" || echo "Disabled")"
         printf "5) Concurrent fragments:           [%s]\n" "${OPTIONS[concurrent_fragments]}"
         printf "6) Sleep between requests:         [%ss]\n" "${OPTIONS[sleep_requests]}"
-        printf "7) Back\n\n"
+        printf "7) Speed limit:                    [%s]\n" "${OPTIONS[limit_rate]:-unlimited}"
+        printf "8) Back\n\n"
 
-        read -rp "Select an option [1-7]: " choice
+        read -rp "Select an option [1-8]: " choice
         printf "\n"
 
         case "$choice" in
@@ -508,7 +636,19 @@ configure_advanced_settings() {
                 [[ "$f" =~ ^[0-9]+$ ]] && OPTIONS[concurrent_fragments]="$f" ;;
             6)  read -rp "Seconds: " s
                 [[ "$s" =~ ^[0-9.]+$ ]] && OPTIONS[sleep_requests]="$s" ;;
-            7) return ;;
+            7)  read -rp "Max speed, e.g. 500K or 4.2M [Enter for unlimited]: " rate
+                rate="${rate^^}"
+                if [[ -z "$rate" ]]; then
+                    OPTIONS[limit_rate]=""
+                    printf "%bSpeed limit removed.%b\n" "${GREEN}" "${NC}"; sleep 1
+                elif [[ "$rate" =~ ^[0-9]+(\.[0-9]+)?[KMG]?$ ]]; then
+                    OPTIONS[limit_rate]="$rate"
+                    printf "%bSpeed limit set to %s.%b\n" "${GREEN}" "$rate" "${NC}"; sleep 1
+                else
+                    _error "Use a number optionally followed by K, M or G (e.g. 500K)."
+                    sleep 2
+                fi ;;
+            8) return ;;
             *) printf "%bInvalid option.%b\n" "${RED}" "${NC}"; sleep 1 ;;
         esac
     done
@@ -603,6 +743,8 @@ view_config() {
         # Container
         if [[ -n "${OPTIONS[remux_video]}" ]]; then
             printf "  %b↳ Remuxing container to: %s%b\n" "${CYAN}" "${OPTIONS[remux_video]^^}" "${NC}"
+        elif [[ -n "${OPTIONS[recode_video]}" ]]; then
+            printf "  %b↳ Re-encoding to: %s (slow)%b\n" "${CYAN}" "${OPTIONS[recode_video]^^}" "${NC}"
         elif [[ "${OPTIONS[merge_output_format]}" == "mkv" ]]; then
              printf "  %b↳ Merging into MKV container%b\n" "${CYAN}" "${NC}"
         fi
@@ -637,6 +779,17 @@ view_config() {
     else
         meta_str=$(_join_array meta_parts ", ")
         printf "%s\n" "$meta_str"
+    fi
+
+    # SponsorBlock detail
+    if [[ "${OPTIONS[sponsorblock_mode]}" != "off" ]]; then
+        if [[ "${OPTIONS[sponsorblock_mode]}" == "remove" ]]; then
+            printf "            %bSponsorBlock: cutting out %s%b" "${YELLOW}" "${OPTIONS[sponsorblock_cats]}" "${NC}"
+            [[ "${OPTIONS[sponsorblock_keyframes]}" == "yes" ]] && printf " (forcing keyframes, re-encodes)"
+            printf "\n"
+        else
+            printf "            %bSponsorBlock: marking %s as chapters%b\n" "${YELLOW}" "${OPTIONS[sponsorblock_cats]}" "${NC}"
+        fi
     fi
 
     # Subtitles detail
@@ -703,7 +856,8 @@ view_config() {
     fi
 
     printf "%s" "$sys_str"
-    printf " [Fragments: %s | Sleep: %ss]\n" "${OPTIONS[concurrent_fragments]}" "${OPTIONS[sleep_requests]}"
+    printf " [Fragments: %s | Sleep: %ss | Speed: %s]\n" \
+        "${OPTIONS[concurrent_fragments]}" "${OPTIONS[sleep_requests]}" "${OPTIONS[limit_rate]:-unlimited}"
 
     printf "\n"
     if [ ${#URL_LIST[@]} -eq 0 ]; then
@@ -819,6 +973,7 @@ execute_ytdlp() {
     cmd+=(--concurrent-fragments "${OPTIONS[concurrent_fragments]}")
     cmd+=(--ffmpeg-location "$ffmpeg_bin")
     cmd+=(--js-runtimes "deno:$deno_bin")
+    [[ -n "${OPTIONS[limit_rate]}" ]] && cmd+=(--limit-rate "${OPTIONS[limit_rate]}")
 
     # Output Path
     if [[ -n "$OUTPUT_DIR" ]]; then
@@ -866,9 +1021,23 @@ execute_ytdlp() {
         [[ -n "${OPTIONS[convert_thumbnails]}" ]] && cmd+=(--convert-thumbnails "${OPTIONS[convert_thumbnails]}")
     fi
 
-    if [[ -z "${OPTIONS[remux_video]}" && -n "${OPTIONS[merge_output_format]}" ]]; then
+    # Only worth asking for a merge container when nothing downstream is going
+    # to change the container anyway.
+    if [[ -z "${OPTIONS[remux_video]}" && -z "${OPTIONS[recode_video]}" && -n "${OPTIONS[merge_output_format]}" ]]; then
         cmd+=(--merge-output-format "${OPTIONS[merge_output_format]}")
     fi
+
+    # SponsorBlock. yt-dlp enables chapter embedding on its own when marking,
+    # so there is deliberately nothing extra passed here for that.
+    case "${OPTIONS[sponsorblock_mode]}" in
+        mark)
+            cmd+=(--sponsorblock-mark "${OPTIONS[sponsorblock_cats]}")
+            ;;
+        remove)
+            cmd+=(--sponsorblock-remove "${OPTIONS[sponsorblock_cats]}")
+            [[ "${OPTIONS[sponsorblock_keyframes]}" == "yes" ]] && cmd+=(--force-keyframes-at-cuts)
+            ;;
+    esac
 
     # Metadata
     if [[ "${OPTIONS[embed_metadata]}" == "yes" ]]; then
@@ -893,8 +1062,10 @@ execute_ytdlp() {
         [[ -n "${OPTIONS[audio_quality]}" ]] && cmd+=(--audio-quality "${OPTIONS[audio_quality]}")
     fi
 
-    # Remux
+    # Container conversion. The menu keeps these two mutually exclusive:
+    # remux only rewraps the streams, recode re-encodes them.
     [[ -n "${OPTIONS[remux_video]}" ]] && cmd+=(--remux-video "${OPTIONS[remux_video]}")
+    [[ -n "${OPTIONS[recode_video]}" ]] && cmd+=(--recode-video "${OPTIONS[recode_video]}")
 
     # Filenames / mtime. restrict-filenames deviates from yt-dlp's default so
     # it's always passed explicitly when enabled. mtime is the opposite case:
