@@ -49,6 +49,16 @@ jobs:
           bash setup.sh --help
           bash download.sh --help
 
+      # lib.sh has to be found next to the real script, not next to the link.
+      # This broke once already when lib.sh was introduced.
+      - name: Both scripts work when run through a symlink
+        run: |
+          mkdir -p "$RUNNER_TEMP/elsewhere"
+          ln -s "$PWD/setup.sh" "$RUNNER_TEMP/elsewhere/setup.sh"
+          ln -s "$PWD/download.sh" "$RUNNER_TEMP/elsewhere/download.sh"
+          bash "$RUNNER_TEMP/elsewhere/setup.sh" --help
+          bash "$RUNNER_TEMP/elsewhere/download.sh" --help
+
       - name: Unknown options are rejected
         run: |
           for script in setup.sh download.sh; do
